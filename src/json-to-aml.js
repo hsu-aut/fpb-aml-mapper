@@ -1,19 +1,19 @@
 // FPB.JS JSON → AutomationML (CAEX 3.0) converter
 
-import { v4 as uuidv4 } from 'uuid';
-import { create } from 'xmlbuilder2';
-import {
+const { v4: uuidv4 } = require('uuid');
+const { create } = require('xmlbuilder2');
+const {
   ELEMENT_TO_SUC, FLOW_TO_INTERFACE,
   OBJECT_TYPES, CONNECTION_TYPES, ATTR_REFS,
-} from './mappings.js';
-import { appendLibraries } from './aml-libraries.js';
+} = require('./mappings.js');
+const { appendLibraries } = require('./aml-libraries.js');
 
 /**
  * Convert FPB.JS JSON array to AML XML string.
  * @param {Array} jsonData - The FPB.JS JSON array (Project header + process entries)
  * @returns {string} CAEX 3.0 XML string
  */
-export function jsonToAml(jsonData) {
+function jsonToAml(jsonData) {
   // ── 1. Parse input ──────────────────────────────────────────────────
   const project = jsonData.find(e => e.$type === 'fpb:Project');
   const processEntries = jsonData.filter(e => e.process);
@@ -442,3 +442,5 @@ function addDoubleSubAttr(parent, name, value) {
   }
   attr.up();
 }
+
+module.exports = { jsonToAml };

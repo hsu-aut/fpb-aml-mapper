@@ -1,10 +1,8 @@
-import express from 'express';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
-import { jsonToAml } from './src/json-to-aml.js';
-import { amlToJson } from './src/aml-to-json.js';
+const express = require('express');
+const path = require('path');
+const { jsonToAml } = require('./src/json-to-aml.js');
+const { amlToJson } = require('./src/aml-to-json.js');
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -20,7 +18,7 @@ app.use((req, res, next) => {
 app.use(express.text({ type: '*/*', limit: '10mb' }));
 
 // Static frontend
-app.use(express.static(join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public')));
 
 // ── API Endpoints ────────────────────────────────────────────────────────
 

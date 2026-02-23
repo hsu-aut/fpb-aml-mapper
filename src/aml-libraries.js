@@ -5,7 +5,7 @@
  * Build the 4 FPD library branches using xmlbuilder2 API.
  * @param {object} root - the <CAEXFile> node (xmlbuilder2 element)
  */
-export function appendLibraries(root) {
+function appendLibraries(root) {
   // ── 1. InterfaceClassLib ──────────────────────────────────────────────
   const icl = root.ele('InterfaceClassLib', { Name: 'FPD_InterfaceClassLib' })
     .ele('Version').txt('1.0.0').up();
@@ -188,3 +188,5 @@ function addVisualAttr(parent) {
   attr.ele('Attribute', { Name: 'height', AttributeDataType: 'xs:double' }).up();
   attr.up();
 }
+
+module.exports = { appendLibraries };

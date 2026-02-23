@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // CLI for fpb-aml-mapper
 
-import { readFileSync, writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { jsonToAml } from './src/json-to-aml.js';
-import { amlToJson } from './src/aml-to-json.js';
+const { readFileSync, writeFileSync } = require('fs');
+const { resolve } = require('path');
+const { jsonToAml } = require('./src/json-to-aml.js');
+const { amlToJson } = require('./src/aml-to-json.js');
 
 const [,, command, inputPath, outputPath] = process.argv;
 

@@ -1,10 +1,10 @@
 // AutomationML (CAEX 3.0) → FPB.JS JSON converter
 
-import { XMLParser } from 'fast-xml-parser';
-import {
+const { XMLParser } = require('fast-xml-parser');
+const {
   SUC_TO_ELEMENT, INTERFACE_TO_FLOW,
   OBJECT_TYPES, ATTR_REFS,
-} from './mappings.js';
+} = require('./mappings.js');
 
 const PARSER_OPTIONS = {
   ignoreAttributes: false,
@@ -23,7 +23,7 @@ const PARSER_OPTIONS = {
  * @param {string} xmlString - CAEX 3.0 XML
  * @returns {Array} FPB.JS JSON array (Project header + process entries)
  */
-export function amlToJson(xmlString) {
+function amlToJson(xmlString) {
   const parser = new XMLParser(PARSER_OPTIONS);
   const doc = parser.parse(xmlString);
   const caex = doc.CAEXFile;
@@ -533,3 +533,5 @@ function generateId() {
   // Generate UUID-like IDs
   return crypto.randomUUID?.() || `gen-${Date.now()}-${idCounter++}`;
 }
+
+module.exports = { amlToJson };

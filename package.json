@@ -3,7 +3,6 @@
   "version": "0.1.0",
   "description": "Bidirectional mapper between FPB.JS JSON and AutomationML (CAEX 3.0)",
   "main": "index.js",
-  "type": "module",
   "scripts": {
     "test": "vitest run",
     "start": "node server.js",
