@@ -45,13 +45,6 @@ app.post('/api/to-json', (req, res) => {
 
 // ── Start ────────────────────────────────────────────────────────────────
 
-if (typeof PhusionPassenger !== 'undefined') {
-  PhusionPassenger.configure({ autoInstall: false });
-  app.listen('passenger', () => {
-    console.log('FPB-AML Mapper running via Passenger');
-  });
-} else {
-  app.listen(PORT, () => {
-    console.log(`FPB-AML Mapper running at http://localhost:${PORT}`);
-  });
-}
+app.listen(PORT, () => {
+  console.log(`FPB-AML Mapper running at http://localhost:${PORT}`);
+});
