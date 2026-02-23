@@ -1,5 +1,6 @@
 // AutomationML (CAEX 3.0) → FPB.JS JSON converter
 
+const { randomUUID } = require('crypto');
 const { XMLParser } = require('fast-xml-parser');
 const {
   SUC_TO_ELEMENT, INTERFACE_TO_FLOW,
@@ -531,7 +532,7 @@ function buildWaypoints(outSide, inSide) {
 let idCounter = 0;
 function generateId() {
   // Generate UUID-like IDs
-  return crypto.randomUUID?.() || `gen-${Date.now()}-${idCounter++}`;
+  return randomUUID();
 }
 
 module.exports = { amlToJson };
