@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FPB ↔ AML Mapper</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background: #f5f5f5; color: #333; }
+
+  header { background: #1a1a2e; color: #fff; padding: 1rem 2rem; display: flex; align-items: center; gap: 1rem; }
+  header h1 { font-size: 1.3rem; font-weight: 600; }
+  header span { font-size: 0.85rem; opacity: 0.6; }
+
+  .container { max-width: 1200px; margin: 0 auto; padding: 1.5rem; }
+
+  /* Direction toggle */
+  .direction { display: flex; gap: 0; margin-bottom: 1.5rem; }
+  .direction button {
+    flex: 1; padding: 0.75rem; border: 2px solid #1a1a2e; background: #fff; color: #1a1a2e;
+    font-size: 1rem; font-weight: 600; cursor: pointer; transition: all 0.15s;
+  }
+  .direction button:first-child { border-radius: 8px 0 0 8px; }
+  .direction button:last-child { border-radius: 0 8px 8px 0; }
+  .direction button.active { background: #1a1a2e; color: #fff; }
+  .direction button:hover:not(.active) { background: #e8e8f0; }
+
+  /* Panels */
+  .panels { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+  @media (max-width: 800px) { .panels { grid-template-columns: 1fr; } }
+
+  .panel { background: #fff; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); overflow: hidden; }
+  .panel-header {
+    padding: 0.75rem 1rem; background: #fafafa; border-bottom: 1px solid #eee;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .panel-header h2 { font-size: 0.9rem; font-weight: 600; color: #555; }
+
+  textarea {
+    width: 100%; height: 400px; border: none; padding: 1rem; resize: vertical;
+    font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace; font-size: 0.8rem;
+    line-height: 1.5; outline: none; background: #fff; color: #333;
+  }
+  textarea:focus { background: #fafcff; }
+  textarea[readonly] { background: #f8f8f8; color: #444; }
+
+  /* Drop zone */
+  .drop-zone {
+    padding: 2rem; text-align: center; border: 2px dashed #ccc; border-radius: 8px;
+    margin: 1rem; cursor: pointer; transition: all 0.15s; color: #888;
+  }
+  .drop-zone:hover, .drop-zone.dragover { border-color: #1a1a2e; background: #f0f0ff; color: #1a1a2e; }
+  .drop-zone.hidden { display: none; }
+  .drop-zone input { display: none; }
+
+  /* Buttons */
+  .actions { display: flex; gap: 0.75rem; justify-content: center; padding: 1.5rem 0; }
+  .btn {
+    padding: 0.6rem 1.5rem; border: none; border-radius: 6px; font-size: 0.9rem;
+    font-weight: 600; cursor: pointer; transition: all 0.15s; display: inline-flex; align-items: center; gap: 0.4rem;
+  }
+  .btn-primary { background: #1a1a2e; color: #fff; }
+  .btn-primary:hover { background: #2a2a4e; }
+  .btn-primary:disabled { background: #999; cursor: not-allowed; }
+  .btn-secondary { background: #e8e8e8; color: #333; }
+  .btn-secondary:hover { background: #ddd; }
+  .btn-secondary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* Error */
+  .error {
+    background: #fff0f0; border: 1px solid #ffcccc; color: #cc0000; padding: 0.75rem 1rem;
+    border-radius: 6px; margin-bottom: 1rem; font-size: 0.85rem; display: none;
+  }
+  .error.visible { display: block; }
+
+  /* Loading */
+  .btn-primary.loading { position: relative; color: transparent; }
+  .btn-primary.loading::after {
+    content: ''; position: absolute; width: 18px; height: 18px;
+    border: 2px solid #fff; border-top-color: transparent; border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .info { font-size: 0.8rem; color: #888; text-align: center; padding-top: 0.5rem; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>FPB ↔ AML Mapper</h1>
+  <span>VDI 3682 · CAEX 3.0</span>
+</header>
+
+<div class="container">
+  <!-- Direction Toggle -->
+  <div class="direction">
+    <button id="btn-to-aml" class="active" onclick="setDirection('to-aml')">JSON → AML</button>
+    <button id="btn-to-json" onclick="setDirection('to-json')">AML → JSON</button>
+  </div>
+
+  <!-- Error display -->
+  <div id="error" class="error"></div>
+
+  <!-- Panels -->
+  <div class="panels">
+    <!-- Input -->
+    <div class="panel">
+      <div class="panel-header">
+        <h2 id="input-label">Input (FPB.JS JSON)</h2>
+        <button class="btn btn-secondary" onclick="clearInput()" style="padding:0.3rem 0.7rem;font-size:0.8rem;">Clear</button>
+      </div>
+      <div id="drop-zone" class="drop-zone" onclick="document.getElementById('file-input').click()">
+        Datei hierher ziehen oder klicken
+        <input type="file" id="file-input" accept=".json,.aml,.xml">
+      </div>
+      <textarea id="input" placeholder="Oder hier einfügen..."></textarea>
+    </div>
+
+    <!-- Output -->
+    <div class="panel">
+      <div class="panel-header">
+        <h2 id="output-label">Output (AutomationML)</h2>
+        <div style="display:flex;gap:0.5rem;">
+          <button class="btn btn-secondary" id="btn-copy" onclick="copyOutput()" disabled style="padding:0.3rem 0.7rem;font-size:0.8rem;">Copy</button>
+          <button class="btn btn-secondary" id="btn-download" onclick="downloadOutput()" disabled style="padding:0.3rem 0.7rem;font-size:0.8rem;">Download</button>
+        </div>
+      </div>
+      <textarea id="output" readonly placeholder="Ergebnis erscheint hier..."></textarea>
+    </div>
+  </div>
+
+  <!-- Convert button -->
+  <div class="actions">
+    <button class="btn btn-primary" id="btn-convert" onclick="convert()">Konvertieren</button>
+  </div>
+
+  <div class="info">
+    CLI: <code>node index.js to-aml input.json output.aml</code> · API: <code>POST /api/to-aml</code>
+  </div>
+</div>
+
+<script>
+let direction = 'to-aml';
+
+function setDirection(dir) {
+  direction = dir;
+  document.getElementById('btn-to-aml').classList.toggle('active', dir === 'to-aml');
+  document.getElementById('btn-to-json').classList.toggle('active', dir === 'to-json');
+  document.getElementById('input-label').textContent = dir === 'to-aml' ? 'Input (FPB.JS JSON)' : 'Input (AutomationML)';
+  document.getElementById('output-label').textContent = dir === 'to-aml' ? 'Output (AutomationML)' : 'Output (FPB.JS JSON)';
+  document.getElementById('file-input').accept = dir === 'to-aml' ? '.json' : '.aml,.xml';
+  hideError();
+}
+
+function clearInput() {
+  document.getElementById('input').value = '';
+  document.getElementById('output').value = '';
+  document.getElementById('drop-zone').classList.remove('hidden');
+  document.getElementById('btn-copy').disabled = true;
+  document.getElementById('btn-download').disabled = true;
+  hideError();
+}
+
+function hideError() {
+  document.getElementById('error').classList.remove('visible');
+}
+
+function showError(msg) {
+  const el = document.getElementById('error');
+  el.textContent = msg;
+  el.classList.add('visible');
+}
+
+// File upload
+const dropZone = document.getElementById('drop-zone');
+const fileInput = document.getElementById('file-input');
+const inputArea = document.getElementById('input');
+
+fileInput.addEventListener('change', (e) => {
+  if (e.target.files[0]) readFile(e.target.files[0]);
+});
+
+dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', (e) => {
+  e.preventDefault();
+  dropZone.classList.remove('dragover');
+  if (e.dataTransfer.files[0]) readFile(e.dataTransfer.files[0]);
+});
+
+function readFile(file) {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    inputArea.value = e.target.result;
+    dropZone.classList.add('hidden');
+    hideError();
+  };
+  reader.readAsText(file);
+}
+
+// Hide drop zone when user types
+inputArea.addEventListener('input', () => {
+  if (inputArea.value.trim()) dropZone.classList.add('hidden');
+  else dropZone.classList.remove('hidden');
+});
+
+// Convert
+async function convert() {
+  const input = inputArea.value.trim();
+  if (!input) { showError('Kein Input vorhanden.'); return; }
+
+  const btn = document.getElementById('btn-convert');
+  btn.classList.add('loading');
+  btn.disabled = true;
+  hideError();
+
+  try {
+    const resp = await fetch(`/api/${direction}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: input,
+    });
+
+    if (!resp.ok) {
+      const err = await resp.json();
+      throw new Error(err.error || `HTTP ${resp.status}`);
+    }
+
+    const result = await resp.text();
+    document.getElementById('output').value = result;
+    document.getElementById('btn-copy').disabled = false;
+    document.getElementById('btn-download').disabled = false;
+  } catch (err) {
+    showError('Fehler: ' + err.message);
+  } finally {
+    btn.classList.remove('loading');
+    btn.disabled = false;
+  }
+}
+
+// Copy
+function copyOutput() {
+  const output = document.getElementById('output');
+  navigator.clipboard.writeText(output.value).then(() => {
+    const btn = document.getElementById('btn-copy');
+    btn.textContent = 'Kopiert!';
+    setTimeout(() => btn.textContent = 'Copy', 1500);
+  });
+}
+
+// Download
+function downloadOutput() {
+  const output = document.getElementById('output').value;
+  if (!output) return;
+  const ext = direction === 'to-aml' ? 'aml' : 'json';
+  const mime = direction === 'to-aml' ? 'application/xml' : 'application/json';
+  const blob = new Blob([output], { type: mime });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `converted.${ext}`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+// Keyboard shortcut
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') convert();
+});
+</script>
+
+</body>
+</html>

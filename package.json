@@ -1,0 +1,22 @@
+{
+  "name": "fpb-aml-mapper",
+  "version": "0.1.0",
+  "description": "Bidirectional mapper between FPB.JS JSON and AutomationML (CAEX 3.0)",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "start": "node server.js",
+    "to-aml": "node index.js to-aml",
+    "to-json": "node index.js to-json"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "fast-xml-parser": "^4.5.0",
+    "uuid": "^9.0.0",
+    "xmlbuilder2": "^3.1.1"
+  },
+  "devDependencies": {
+    "vitest": "^1.6.0"
+  }
+}
