@@ -60,7 +60,7 @@ function appendRoleClassLib(root) {
   const state = obj.ele('RoleClass', { Name: 'FPD_State' })
     .ele('Version').txt('1.0.0').up()
     .ele('Description').txt('Abstract state (Part 2, Fig. 2). Inherits Identification and Characteristics from FPD_Object.').up();
-  addRefObjAttr(state, 'IDREF to the corresponding state instance in the parent process. Used on boundary states to reference their original one level up in the decomposition hierarchy.');
+  addRefObjAttr(state, 'IDREF to the original state instance that this boundary state represents. Always points to the top-level original, regardless of decomposition depth.');
 
   // Concrete states
   for (const name of ['FPD_Product', 'FPD_Energy', 'FPD_Information']) {

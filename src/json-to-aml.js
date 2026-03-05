@@ -262,14 +262,16 @@ function buildProcess(parent, processId, processMap, processAmlIds, poToChildPro
         addRefObjAttr(ie, '');
       }
     } else if (['fpb:Product', 'fpb:Energy', 'fpb:Information'].includes(obj.$type)) {
-      // For states in child processes: boundary states share the same ID
-      // in FPB.JS JSON across levels → refObj points to the shared ID
+      // Boundary states share the same FPB.JS ID across all decomposition
+      // levels. The top-level original uses that ID as its AML ID, while
+      // deeper boundary copies get new UUIDs. Therefore obj.id always
+      // equals the top-level original's AML ID, regardless of depth.
       if (isChildProcess && parentEntry) {
         const parentState = parentEntry.elementDataInformation.find(
           e => e.id === obj.id && ['fpb:Product', 'fpb:Energy', 'fpb:Information'].includes(e.$type)
         );
         if (parentState) {
-          // Boundary state — refObj → FPB.JS ID = parent state's AML ID
+          // Boundary state — refObj → top-level original's AML ID
           addRefObjAttr(ie, obj.id);
         } else {
           addRefObjAttr(ie, '');
