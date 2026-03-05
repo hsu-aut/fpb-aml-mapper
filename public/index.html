@@ -82,6 +82,22 @@
   }
   @keyframes spin { to { transform: rotate(360deg); } }
 
+  /* Progress bar */
+  .progress-bar {
+    height: 3px; background: #e0e0e0; border-radius: 2px; margin: 0 1rem 0.5rem;
+    overflow: hidden; display: none;
+  }
+  .progress-bar.visible { display: block; }
+  .progress-bar .progress-fill {
+    height: 100%; width: 0%; background: #1a1a2e; border-radius: 2px;
+    animation: indeterminate 1.5s ease-in-out infinite;
+  }
+  @keyframes indeterminate {
+    0% { width: 0%; margin-left: 0; }
+    50% { width: 60%; margin-left: 20%; }
+    100% { width: 0%; margin-left: 100%; }
+  }
+
   .info { font-size: 0.8rem; color: #888; text-align: center; padding-top: 0.5rem; }
 </style>
 </head>
@@ -126,6 +142,7 @@
           <button class="btn btn-secondary" id="btn-download" onclick="downloadOutput()" disabled style="padding:0.3rem 0.7rem;font-size:0.8rem;">Download</button>
         </div>
       </div>
+      <div id="progress" class="progress-bar"><div class="progress-fill"></div></div>
       <textarea id="output" readonly placeholder="Ergebnis erscheint hier..."></textarea>
     </div>
   </div>
@@ -211,8 +228,10 @@ async function convert() {
   if (!input) { showError('Kein Input vorhanden.'); return; }
 
   const btn = document.getElementById('btn-convert');
+  const progress = document.getElementById('progress');
   btn.classList.add('loading');
   btn.disabled = true;
+  progress.classList.add('visible');
   hideError();
 
   try {
@@ -236,6 +255,7 @@ async function convert() {
   } finally {
     btn.classList.remove('loading');
     btn.disabled = false;
+    progress.classList.remove('visible');
   }
 }
 
