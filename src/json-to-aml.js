@@ -18,16 +18,36 @@ function jsonToAml(jsonData) {
   const project = jsonData.find(e => e.$type === 'fpb:Project');
   const processEntries = jsonData.filter(e => e.process);
 
-  // Build lookup: processId → { process, elementDataInformation, elementVisualInformation }
+  // Build lookup: processId → entry
   const processMap = new Map();
   for (const entry of processEntries) {
     processMap.set(entry.process.id, entry);
   }
 
-  // Find entry point process
   const entryProcessId = project.entryPoint;
 
-  // ── 2. Build AML document ──────────────────────────────────────────
+  // ── 2. Pre-assign AML IDs ───────────────────────────────────────────
+  // Strategy: use FPB.JS IDs as AML IDs wherever possible.
+  // New UUIDs only where collisions occur:
+  //   - Processes (FPB.JS child process ID = PO ID → collision)
+  //   - Boundary states in child processes (same FPB.JS ID as parent state)
+  const processAmlIds = new Map(); // FPB.JS processId → AML ID
+  const poToChildProcess = new Map(); // FPB.JS PO elementId → child processId
+
+  const allProcessIds = collectProcessIds(entryProcessId, processMap);
+
+  for (const pid of allProcessIds) {
+    processAmlIds.set(pid, uuidv4()); // Processes always get new UUIDs
+    const entry = processMap.get(pid);
+    if (!entry) continue;
+    for (const obj of entry.elementDataInformation) {
+      if (obj.$type === 'fpb:ProcessOperator' && obj.decomposedView) {
+        poToChildProcess.set(obj.id, obj.decomposedView);
+      }
+    }
+  }
+
+  // ── 3. Build AML document ──────────────────────────────────────────
   const doc = create({ version: '1.0', encoding: 'utf-8' });
   const caex = doc.ele('CAEXFile', {
     'xmlns': 'http://www.dke.de/CAEX',
@@ -45,24 +65,49 @@ function jsonToAml(jsonData) {
     LastWritingDateTime: new Date().toISOString(),
   }).up();
 
-  // ── 3. InstanceHierarchy ───────────────────────────────────────────
-  const ih = caex.ele('InstanceHierarchy', { Name: 'InstanceHierarchy', ID: uuidv4() })
+  // ── 4. InstanceHierarchy ───────────────────────────────────────────
+  const ihName = project.name || 'InstanceHierarchy';
+  const ih = caex.ele('InstanceHierarchy', { Name: ihName, ID: uuidv4() })
     .ele('Version').txt('1.0.0').up();
 
-  // Build the entry process (recursively handles decomposition)
-  buildProcess(ih, entryProcessId, processMap);
+  // Track which FPB.JS IDs have been emitted as AML IDs (shared across processes)
+  const usedAmlIds = new Set();
 
-  // ── 4. Append library definitions ──────────────────────────────────
+  // Build each process as a peer InternalElement in the IH
+  for (const pid of allProcessIds) {
+    buildProcess(ih, pid, processMap, processAmlIds, poToChildProcess, usedAmlIds);
+  }
+
+  // ── 5. Append library definitions ──────────────────────────────────
   appendLibraries(caex);
 
   return doc.end({ prettyPrint: true, indent: '  ' });
 }
 
+/**
+ * Collect all process IDs recursively (entry + decomposed children) in order.
+ */
+function collectProcessIds(processId, processMap) {
+  const result = [processId];
+  const entry = processMap.get(processId);
+  if (!entry) return result;
+
+  for (const obj of entry.elementDataInformation) {
+    if (obj.$type === 'fpb:ProcessOperator' && obj.decomposedView) {
+      const childProcessId = obj.decomposedView;
+      if (processMap.has(childProcessId)) {
+        result.push(...collectProcessIds(childProcessId, processMap));
+      }
+    }
+  }
+  return result;
+}
+
 // ══════════════════════════════════════════════════════════════════════════
-// Process builder (recursive for decomposition)
+// Process builder
 // ══════════════════════════════════════════════════════════════════════════
 
-function buildProcess(parent, processId, processMap) {
+function buildProcess(parent, processId, processMap, processAmlIds, poToChildProcess, usedAmlIds) {
   const entry = processMap.get(processId);
   if (!entry) return;
 
@@ -80,37 +125,57 @@ function buildProcess(parent, processId, processMap) {
     dataMap.set(di.id, di);
   }
 
-  // Determine process name from SystemLimit name or "Process"
+  // Determine process name:
+  // - Child processes: named after their parent PO
+  // - Entry process: named after the SystemLimit
   const slData = elementDataInformation.find(e => e.$type === 'fpb:SystemLimit');
-  const processName = slData?.name || 'Process';
+  const parentPOId = process.isDecomposedProcessOperator;
+  let processName;
+  if (parentPOId) {
+    // Find the PO's name in the parent process
+    for (const [, pe] of processMap) {
+      const po = pe.elementDataInformation.find(e => e.id === parentPOId);
+      if (po) { processName = po.name; break; }
+    }
+  }
+  if (!processName) processName = slData?.name || 'Process';
 
-  // Create the FPD_Process InternalElement
+  // Create the FPD_Process InternalElement with pre-assigned AML ID
+  const processAmlId = processAmlIds.get(processId);
   const procIE = parent.ele('InternalElement', {
     Name: processName,
-    ID: uuidv4(),
+    ID: processAmlId,
     RefBaseSystemUnitPath: ELEMENT_TO_SUC['fpb:Process'],
   });
+
+  // refObj: for child processes, points back to the parent PO's AML ID.
+  // Since POs use their FPB.JS ID as AML ID, this is just the PO's FPB.JS ID.
+  if (parentPOId) {
+    addRefObjAttr(procIE, parentPOId);
+  } else {
+    addRefObjAttr(procIE, '');
+  }
 
   // ── SystemLimit ────────────────────────────────────────────────────
   if (slData) {
     const slVisual = visualMap.get(slData.id);
     const slIE = procIE.ele('InternalElement', {
-      Name: slData.name || 'SystemLimit',
-      ID: uuidv4(),
+      Name: 'SystemLimit_' + (processName || 'Process').replace(/\s+/g, ''),
+      ID: slData.id,
       RefBaseSystemUnitPath: ELEMENT_TO_SUC['fpb:SystemLimit'],
     });
+    addIdentification(slIE, slData.identification, processName);
     if (slVisual) {
-      addVisualAttr(slIE, slVisual);
+      addViewInformation(slIE, slVisual);
     }
     slIE.up();
   }
 
   // ── Collect interface IDs for InternalLinks ────────────────────────
-  // Map: flowId → { outInterfaceId, inInterfaceId }
   const linkMap = new Map();
 
-  // Track interface name counters per element for numbering (FPD_FlowIn, FPD_FlowIn1, ...)
-  const ifaceCounters = new Map(); // elementId → Map<baseName, count>
+  // Track interface name counters per element for numbering (_2, _3, ...)
+  const ifaceCounters = new Map();
 
   function getNextInterfaceName(elementId, baseName) {
     if (!ifaceCounters.has(elementId)) {
@@ -119,16 +184,15 @@ function buildProcess(parent, processId, processMap) {
     const counters = ifaceCounters.get(elementId);
     const count = counters.get(baseName) || 0;
     counters.set(baseName, count + 1);
-    return count === 0 ? baseName : `${baseName}${count}`;
+    return count === 0 ? baseName : `${baseName}_${count + 1}`;
   }
 
   // ── Object elements (States, POs, TRs) ────────────────────────────
-  // Collect flows first to know which interfaces each element needs
   const flows = elementDataInformation.filter(e => CONNECTION_TYPES.has(e.$type));
   const objects = elementDataInformation.filter(e => OBJECT_TYPES.has(e.$type));
 
   // Group flows by source and target element
-  const flowsBySource = new Map(); // elementId → [flow, ...]
+  const flowsBySource = new Map();
   const flowsByTarget = new Map();
   for (const flow of flows) {
     if (!flowsBySource.has(flow.sourceRef)) flowsBySource.set(flow.sourceRef, []);
@@ -137,33 +201,87 @@ function buildProcess(parent, processId, processMap) {
     flowsByTarget.get(flow.targetRef).push(flow);
   }
 
-  // Track element IE nodes for adding interfaces
-  const elementIEs = new Map(); // elementId → xmlbuilder element
+  // Determine if this is a child process (has boundary states with shared IDs)
+  const isChildProcess = !!parentPOId;
+  // For child processes, find the parent process to resolve boundary state refs
+  let parentEntry = null;
+  if (isChildProcess) {
+    for (const [, pe] of processMap) {
+      const parentPO = pe.elementDataInformation.find(
+        e => e.$type === 'fpb:ProcessOperator' && e.decomposedView === processId
+      );
+      if (parentPO) {
+        parentEntry = pe;
+        break;
+      }
+    }
+  }
+
+  const elementIEs = new Map();
 
   for (const obj of objects) {
-    if (obj.$type === 'fpb:SystemLimit') continue; // already handled
+    if (obj.$type === 'fpb:SystemLimit') continue;
 
     const visual = visualMap.get(obj.id);
     const sucPath = ELEMENT_TO_SUC[obj.$type];
     if (!sucPath) continue;
 
+    const elemName = obj.name || obj.$type.split(':')[1];
+    const cleanName = elemName.replace(/\n/g, '');
+
+    // Use FPB.JS ID as AML ID if not yet used; boundary states in child
+    // processes get a new UUID (their FPB.JS ID is taken by the parent).
+    let elemAmlId;
+    if (usedAmlIds.has(obj.id)) {
+      elemAmlId = uuidv4(); // Collision → boundary state in child process
+    } else {
+      elemAmlId = obj.id;   // First occurrence → use FPB.JS ID directly
+    }
+    usedAmlIds.add(elemAmlId);
+
     const ie = procIE.ele('InternalElement', {
-      Name: obj.name || obj.$type.split(':')[1],
-      ID: uuidv4(),
+      Name: cleanName,
+      ID: elemAmlId,
       RefBaseSystemUnitPath: sucPath,
     });
 
-    // Identification
-    if (obj.identification) {
-      addIdentificationAttr(ie, obj.identification);
-    }
+    // Identification (full fields)
+    addIdentification(ie, obj.identification, cleanName);
 
     // Characteristics
-    addCharacteristicsAttr(ie, obj.characteristics);
+    addCharacteristics(ie, obj.characteristics);
 
-    // Visual
+    // refObj: depends on element type
+    if (obj.$type === 'fpb:ProcessOperator') {
+      if (obj.decomposedView && poToChildProcess.has(obj.id)) {
+        // refObj → child process's AML ID
+        const childProcessId = poToChildProcess.get(obj.id);
+        const childProcessAmlId = processAmlIds.get(childProcessId);
+        addRefObjAttr(ie, childProcessAmlId || '');
+      } else {
+        addRefObjAttr(ie, '');
+      }
+    } else if (['fpb:Product', 'fpb:Energy', 'fpb:Information'].includes(obj.$type)) {
+      // For states in child processes: boundary states share the same ID
+      // in FPB.JS JSON across levels → refObj points to the shared ID
+      if (isChildProcess && parentEntry) {
+        const parentState = parentEntry.elementDataInformation.find(
+          e => e.id === obj.id && ['fpb:Product', 'fpb:Energy', 'fpb:Information'].includes(e.$type)
+        );
+        if (parentState) {
+          // Boundary state — refObj → FPB.JS ID = parent state's AML ID
+          addRefObjAttr(ie, obj.id);
+        } else {
+          addRefObjAttr(ie, '');
+        }
+      } else {
+        addRefObjAttr(ie, '');
+      }
+    }
+
+    // ViewInformation
     if (visual) {
-      addVisualAttr(ie, visual);
+      addViewInformation(ie, visual);
     }
 
     elementIEs.set(obj.id, ie);
@@ -174,7 +292,7 @@ function buildProcess(parent, processId, processMap) {
       const ifacePaths = FLOW_TO_INTERFACE[flow.$type];
       if (!ifacePaths) continue;
 
-      const outBaseName = ifacePaths.out.split('/')[1]; // e.g. "FPD_ParallelFlowOut"
+      const outBaseName = ifacePaths.out.split('/')[1];
       const ifaceName = getNextInterfaceName(obj.id, outBaseName);
       const ifaceId = uuidv4();
 
@@ -186,8 +304,19 @@ function buildProcess(parent, processId, processMap) {
 
       // PortCoordinate + Waypoints from visual info
       const flowVisual = visualMap.get(flow.id);
-      if (flowVisual?.waypoints) {
-        addFlowOutInterface(extIf, flowVisual.waypoints);
+      if (flowVisual?.waypoints && flowVisual.waypoints.length > 0) {
+        // First waypoint's original = source port coordinate
+        const firstWp = flowVisual.waypoints[0];
+        const portCoord = firstWp.original || firstWp;
+        addPortCoordinate(extIf, portCoord.x, portCoord.y);
+
+        // Intermediate waypoints (between first and last) = bends
+        const intermediates = flowVisual.waypoints.slice(1, -1);
+        for (let i = 0; i < intermediates.length; i++) {
+          const wp = intermediates[i];
+          if (wp.original) continue;
+          addWaypointAttr(extIf, i + 1, wp.x, wp.y);
+        }
       } else {
         addEmptyPortCoordinate(extIf);
       }
@@ -204,7 +333,7 @@ function buildProcess(parent, processId, processMap) {
       const ifacePaths = FLOW_TO_INTERFACE[flow.$type];
       if (!ifacePaths) continue;
 
-      const inBaseName = ifacePaths.in.split('/')[1]; // e.g. "FPD_ParallelFlowIn"
+      const inBaseName = ifacePaths.in.split('/')[1];
       const ifaceName = getNextInterfaceName(obj.id, inBaseName);
       const ifaceId = uuidv4();
 
@@ -216,8 +345,10 @@ function buildProcess(parent, processId, processMap) {
 
       // PortCoordinate from last waypoint
       const flowVisual = visualMap.get(flow.id);
-      if (flowVisual?.waypoints) {
-        addFlowInInterface(extIf, flowVisual.waypoints);
+      if (flowVisual?.waypoints && flowVisual.waypoints.length > 0) {
+        const lastWp = flowVisual.waypoints[flowVisual.waypoints.length - 1];
+        const portCoord = lastWp.original || lastWp;
+        addPortCoordinate(extIf, portCoord.x, portCoord.y);
       } else {
         addEmptyPortCoordinate(extIf);
       }
@@ -228,26 +359,30 @@ function buildProcess(parent, processId, processMap) {
       linkMap.get(flow.id).inInterfaceId = ifaceId;
     }
 
-    // ── Decomposition: PO with decomposedView ──────────────────────
-    if (obj.$type === 'fpb:ProcessOperator' && obj.decomposedView) {
-      // The decomposedView ID points to a child process
-      buildProcess(ie, obj.decomposedView, processMap);
-    }
-
     ie.up();
   }
 
   // ── InternalLinks ──────────────────────────────────────────────────
-  let linkCounter = 0;
   for (const [flowId, ids] of linkMap) {
     if (ids.outInterfaceId && ids.inInterfaceId) {
-      const linkName = linkCounter === 0 ? 'Link' : `Link${linkCounter}`;
+      const flow = dataMap.get(flowId);
+      const sourceData = flow ? dataMap.get(flow.sourceRef) : null;
+      const targetData = flow ? dataMap.get(flow.targetRef) : null;
+      const sourceName = sourceData?.name?.replace(/[\s\n]/g, '') || 'Source';
+      const targetName = targetData?.name?.replace(/[\s\n]/g, '') || 'Target';
+
+      let linkName;
+      if (flow?.$type === 'fpb:Usage') {
+        linkName = `${sourceName}_uses_${targetName}`;
+      } else {
+        linkName = `${sourceName}_to_${targetName}`;
+      }
+
       procIE.ele('InternalLink', {
+        Name: linkName,
         RefPartnerSideA: ids.outInterfaceId,
         RefPartnerSideB: ids.inInterfaceId,
-        Name: linkName,
       }).up();
-      linkCounter++;
     }
   }
 
@@ -258,83 +393,130 @@ function buildProcess(parent, processId, processMap) {
 // Attribute builders
 // ══════════════════════════════════════════════════════════════════════════
 
-function addIdentificationAttr(parent, identification) {
+function addIdentification(parent, ident, fallbackName) {
   const attr = parent.ele('Attribute', {
     Name: 'Identification',
     AttributeDataType: 'xs:string',
     RefAttributeType: ATTR_REFS.identification,
   });
-  addStringSubAttr(attr, 'uniqueIdent', identification.uniqueIdent);
-  addStringSubAttr(attr, 'longName', identification.longName);
-  addStringSubAttr(attr, 'shortName', identification.shortName);
-  addStringSubAttr(attr, 'versionNumber', identification.versionNumber);
-  addStringSubAttr(attr, 'revisionNumber', identification.revisionNumber);
+  const fields = ['uniqueIdent', 'longName', 'shortName', 'versionNumber', 'revisionNumber'];
+  for (const f of fields) {
+    const val = ident?.[f] || (f === 'shortName' ? fallbackName : '') || '';
+    const sub = attr.ele('Attribute', { Name: f, AttributeDataType: 'xs:string' });
+    if (val) sub.ele('Value').txt(val).up();
+    sub.up();
+  }
   attr.up();
 }
 
-function addCharacteristicsAttr(parent, characteristics) {
+function addCharacteristics(parent, characteristics) {
+  if (!characteristics || characteristics.length === 0) return;
+
   const container = parent.ele('Attribute', {
     Name: 'Characteristics',
     AttributeDataType: 'xs:string',
   });
-  container.ele('Description').txt('Container for characteristics').up();
 
-  if (characteristics && characteristics.length > 0) {
-    for (let i = 0; i < characteristics.length; i++) {
-      const c = characteristics[i];
-      const name = i === 0 ? 'Characteristic' : `Characteristic${i}`;
-      const cAttr = container.ele('Attribute', {
-        Name: name,
-        AttributeDataType: 'xs:string',
-        RefAttributeType: ATTR_REFS.characteristic,
-      });
-      if (c.identification) {
-        const cIdent = cAttr.ele('Attribute', {
-          Name: 'Identification',
-          AttributeDataType: 'xs:string',
-          RefAttributeType: ATTR_REFS.identification,
-        });
-        addStringSubAttr(cIdent, 'uniqueIdent', c.identification.uniqueIdent);
-        addStringSubAttr(cIdent, 'longName', c.identification.longName);
-        addStringSubAttr(cIdent, 'shortName', c.identification.shortName);
-        addStringSubAttr(cIdent, 'versionNumber', c.identification.versionNumber);
-        addStringSubAttr(cIdent, 'revisionNumber', c.identification.revisionNumber);
-        cIdent.up();
-      }
-      if (c.descriptiveElement) {
-        const desc = cAttr.ele('Attribute', { Name: 'DescriptiveElement', AttributeDataType: 'xs:string' });
-        addStringSubAttr(desc, 'valueDeterminationProcess', c.descriptiveElement.valueDeterminationProcess);
-        addStringSubAttr(desc, 'representivity', c.descriptiveElement.representivity);
-        addStringSubAttr(desc, 'setpointValue', c.descriptiveElement.setpointValue);
-        addStringSubAttr(desc, 'validityLimits', c.descriptiveElement.validityLimits);
-        addStringSubAttr(desc, 'actualValues', c.descriptiveElement.actualValues);
-        desc.up();
-      }
-      if (c.relationalElement) {
-        const rel = cAttr.ele('Attribute', { Name: 'RelationalElement', AttributeDataType: 'xs:string' });
-        addStringSubAttr(rel, 'view', c.relationalElement.view);
-        addStringSubAttr(rel, 'model', c.relationalElement.model);
-        addStringSubAttr(rel, 'regulationsForRelationalGeneration', c.relationalElement.regulationsForRelationalGeneration);
-        rel.up();
-      }
-      cAttr.up();
+  for (let i = 0; i < characteristics.length; i++) {
+    const c = characteristics[i];
+    const cAttr = container.ele('Attribute', {
+      Name: `Characteristic_${i + 1}`,
+      AttributeDataType: 'xs:string',
+      RefAttributeType: ATTR_REFS.characteristic,
+    });
+
+    // Category (Kategorie gemäß VDI 3682 Blatt 2, Bild 5)
+    const cat = c.category || {};
+    const identAttr = cAttr.ele('Attribute', {
+      Name: 'Category',
+      AttributeDataType: 'xs:string',
+      RefAttributeType: ATTR_REFS.identification,
+    });
+    for (const f of ['uniqueIdent', 'longName', 'shortName', 'versionNumber', 'revisionNumber']) {
+      const val = cat[f] || '';
+      const sub = identAttr.ele('Attribute', { Name: f, AttributeDataType: 'xs:string' });
+      if (val) sub.ele('Value').txt(val).up();
+      sub.up();
     }
+    identAttr.up();
+
+    // DescriptiveElement
+    const desc = c.descriptiveElement || {};
+    const descAttr = cAttr.ele('Attribute', { Name: 'DescriptiveElement', AttributeDataType: 'xs:string' });
+    addStringSubAttr(descAttr, 'valueDeterminationProcess', desc.valueDeterminationProcess);
+    addStringSubAttr(descAttr, 'representivity', desc.representivity);
+    addStringSubAttr(descAttr, 'setpointValue', formatValueWithUnit(desc.setpointValue));
+    addStringSubAttr(descAttr, 'validityLimits', formatValidityLimits(desc.validityLimits));
+    addStringSubAttr(descAttr, 'actualValues', formatActualValues(desc.actualValues));
+    descAttr.up();
+
+    // RelationalElement
+    const rel = c.relationalElement || {};
+    const relAttr = cAttr.ele('Attribute', { Name: 'RelationalElement', AttributeDataType: 'xs:string' });
+    addStringSubAttr(relAttr, 'view', rel.view);
+    addStringSubAttr(relAttr, 'model', rel.model);
+    addStringSubAttr(relAttr, 'regulationsForRelationalGeneration', rel.regulationsForRelationalGeneration);
+    relAttr.up();
+
+    cAttr.up();
   }
 
   container.up();
 }
 
-function addVisualAttr(parent, visual) {
+function addStringSubAttr(parent, name, value) {
+  const attr = parent.ele('Attribute', { Name: name, AttributeDataType: 'xs:string' });
+  if (value) attr.ele('Value').txt(String(value)).up();
+  attr.up();
+}
+
+function formatValueWithUnit(v) {
+  if (!v) return '';
+  if (typeof v === 'string') return v;
+  const val = v.value != null ? String(v.value) : '';
+  const unit = v.unit || '';
+  return unit ? `${val} ${unit}` : val;
+}
+
+function formatValidityLimits(arr) {
+  if (!arr || !Array.isArray(arr)) return '';
+  return arr
+    .filter(v => v.from || v.to)
+    .map(v => `${v.from}-${v.to}`)
+    .join(', ');
+}
+
+function formatActualValues(arr) {
+  if (!arr || !Array.isArray(arr)) return '';
+  return arr
+    .filter(v => v.value)
+    .map(v => formatValueWithUnit(v))
+    .join(', ');
+}
+
+function addRefObjAttr(parent, value) {
   const attr = parent.ele('Attribute', {
-    Name: 'Visual',
+    Name: 'refObj',
     AttributeDataType: 'xs:string',
-    RefAttributeType: ATTR_REFS.elementVisual,
+    RefAttributeType: ATTR_REFS.refObj,
+  });
+  if (value) {
+    attr.ele('Value').txt(value).up();
+  }
+  attr.up();
+}
+
+function addViewInformation(parent, visual) {
+  const attr = parent.ele('Attribute', {
+    Name: 'ViewInformation',
+    AttributeDataType: 'xs:string',
+    RefAttributeType: ATTR_REFS.bounds,
   });
 
   const pos = attr.ele('Attribute', {
     Name: 'position',
     AttributeDataType: 'xs:string',
-    RefAttributeType: ATTR_REFS.coordinate,
+    RefAttributeType: ATTR_REFS.point,
   });
   addDoubleSubAttr(pos, 'x', visual.x);
   addDoubleSubAttr(pos, 'y', visual.y);
@@ -346,68 +528,11 @@ function addVisualAttr(parent, visual) {
   attr.up();
 }
 
-/**
- * Add PortCoordinate + Waypoints to an Out-interface.
- * Convention: first waypoint (with original) → PortCoordinate,
- * middle waypoints (without original) → FPD_Waypoint, FPD_Waypoint1, ...
- * Last waypoint is the In-side anchor (not stored here).
- */
-function addFlowOutInterface(extIf, waypoints) {
-  if (!waypoints || waypoints.length === 0) {
-    addEmptyPortCoordinate(extIf);
-    return;
-  }
-
-  // First waypoint → PortCoordinate (the "original" anchor point on the source)
-  const first = waypoints[0];
-  const portCoord = first.original || first;
-  addPortCoordinate(extIf, portCoord.x, portCoord.y);
-
-  // Middle waypoints → FPD_Waypoint, FPD_Waypoint1, ...
-  // (all waypoints between first and last that don't have "original")
-  const middleWaypoints = waypoints.slice(1, -1);
-  let wpCounter = 0;
-  for (const wp of middleWaypoints) {
-    if (wp.original) continue; // skip if it's an anchor (shouldn't happen in middle)
-    const wpName = wpCounter === 0 ? 'FPD_Waypoint' : `FPD_Waypoint${wpCounter}`;
-    const wpAttr = extIf.ele('Attribute', {
-      Name: wpName,
-      AttributeDataType: 'xs:string',
-      RefAttributeType: ATTR_REFS.waypoint,
-    });
-    const wpPos = wpAttr.ele('Attribute', {
-      Name: 'position',
-      AttributeDataType: 'xs:string',
-      RefAttributeType: ATTR_REFS.coordinate,
-    });
-    addDoubleSubAttr(wpPos, 'x', wp.x);
-    addDoubleSubAttr(wpPos, 'y', wp.y);
-    wpPos.up();
-    wpAttr.up();
-    wpCounter++;
-  }
-}
-
-/**
- * Add PortCoordinate to an In-interface.
- * Convention: last waypoint (with original) → PortCoordinate
- */
-function addFlowInInterface(extIf, waypoints) {
-  if (!waypoints || waypoints.length === 0) {
-    addEmptyPortCoordinate(extIf);
-    return;
-  }
-
-  const last = waypoints[waypoints.length - 1];
-  const portCoord = last.original || last;
-  addPortCoordinate(extIf, portCoord.x, portCoord.y);
-}
-
 function addPortCoordinate(parent, x, y) {
   const attr = parent.ele('Attribute', {
     Name: 'PortCoordinate',
     AttributeDataType: 'xs:string',
-    RefAttributeType: ATTR_REFS.coordinate,
+    RefAttributeType: ATTR_REFS.point,
   });
   addDoubleSubAttr(attr, 'x', x);
   addDoubleSubAttr(attr, 'y', y);
@@ -418,21 +543,28 @@ function addEmptyPortCoordinate(parent) {
   const attr = parent.ele('Attribute', {
     Name: 'PortCoordinate',
     AttributeDataType: 'xs:string',
-    RefAttributeType: ATTR_REFS.coordinate,
+    RefAttributeType: ATTR_REFS.point,
   });
   attr.ele('Attribute', { Name: 'x', AttributeDataType: 'xs:double' }).up();
   attr.ele('Attribute', { Name: 'y', AttributeDataType: 'xs:double' }).up();
   attr.up();
 }
 
-// ── Primitive attribute helpers ──────────────────────────────────────────
-
-function addStringSubAttr(parent, name, value) {
-  const attr = parent.ele('Attribute', { Name: name, AttributeDataType: 'xs:string' });
-  if (value !== undefined && value !== null && value !== '') {
-    attr.ele('Value').txt(String(value)).up();
-  }
-  attr.up();
+function addWaypointAttr(parent, index, x, y) {
+  const wpAttr = parent.ele('Attribute', {
+    Name: `Waypoint_${index}`,
+    AttributeDataType: 'xs:string',
+    RefAttributeType: ATTR_REFS.waypoint,
+  });
+  const wpPos = wpAttr.ele('Attribute', {
+    Name: 'position',
+    AttributeDataType: 'xs:string',
+    RefAttributeType: ATTR_REFS.point,
+  });
+  addDoubleSubAttr(wpPos, 'x', x);
+  addDoubleSubAttr(wpPos, 'y', y);
+  wpPos.up();
+  wpAttr.up();
 }
 
 function addDoubleSubAttr(parent, name, value) {

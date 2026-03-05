@@ -48,9 +48,10 @@ const CONNECTION_TYPES = new Set([
 const ATTR_REFS = {
   identification: 'FPD_AttributeTypeLib/FPD_Identification',
   characteristic: 'FPD_AttributeTypeLib/FPD_Characteristic',
-  elementVisual:  'FPD_VisualAttributeTypeLib/FPD_ElementVisual',
-  coordinate:     'FPD_VisualAttributeTypeLib/FPD_Coordinate',
-  waypoint:       'FPD_VisualAttributeTypeLib/FPD_Waypoint',
+  refObj:         'FPD_AttributeTypeLib/refObj',
+  bounds:         'FPD_DI_AttributeTypeLib/FPD_Bounds',
+  point:          'FPD_DI_AttributeTypeLib/FPD_Point',
+  waypoint:       'FPD_DI_AttributeTypeLib/FPD_Waypoint',
 };
 
 module.exports = {

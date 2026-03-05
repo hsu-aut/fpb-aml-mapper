@@ -11,7 +11,6 @@ const PARSER_OPTIONS = {
   ignoreAttributes: false,
   attributeNamePrefix: '@_',
   isArray: (name) => {
-    // These elements can appear multiple times
     return [
       'InternalElement', 'ExternalInterface', 'InternalLink',
       'Attribute', 'InstanceHierarchy',
@@ -34,34 +33,113 @@ function amlToJson(xmlString) {
   if (!ihs || ihs.length === 0) throw new Error('No InstanceHierarchy found');
   const ih = ihs[0];
 
-  // Find the top-level FPD_Process
-  const topProcess = findByRefSUC(ih.InternalElement || [], 'FPD_SystemUnitClassLib/FPD_Process');
-  if (!topProcess) throw new Error('No FPD_Process found in InstanceHierarchy');
+  // Collect all FPD_Process InternalElements (flat structure)
+  const allProcessIEs = (ih.InternalElement || []).filter(
+    ie => ie['@_RefBaseSystemUnitPath'] === 'FPD_SystemUnitClassLib/FPD_Process'
+  );
 
-  // Collect all process entries recursively
+  if (allProcessIEs.length === 0) throw new Error('No FPD_Process found in InstanceHierarchy');
+
+  // Build refObj lookup: process refObj → parent PO AML ID
+  // and PO refObj → child process AML ID
+  const processRefObjMap = new Map(); // process AML ID → parent PO ID (from refObj)
+  const poRefObjMap = new Map(); // PO AML ID → child process AML ID (from refObj)
+
+  for (const procIE of allProcessIEs) {
+    const procRefObj = getRefObjValue(procIE);
+    if (procRefObj) {
+      processRefObjMap.set(procIE['@_ID'], procRefObj);
+    }
+
+    // Scan POs inside this process for refObj → child process
+    const children = procIE.InternalElement || [];
+    for (const ie of children) {
+      if (ie['@_RefBaseSystemUnitPath'] === 'FPD_SystemUnitClassLib/FPD_ProcessOperator') {
+        const poRefObj = getRefObjValue(ie);
+        if (poRefObj) {
+          poRefObjMap.set(ie['@_ID'], poRefObj);
+        }
+      }
+    }
+  }
+
+  // Determine entry process (the one without a refObj pointing to a parent PO)
+  const entryProcess = allProcessIEs.find(
+    procIE => !getRefObjValue(procIE)
+  ) || allProcessIEs[0];
+
+  // Parse all processes
   const processEntries = [];
-  const entryProcessId = parseProcess(topProcess, null, processEntries);
+  const processIdMap = new Map(); // AML Process ID → FPB.JS process ID
+  const amlToFpbId = new Map();   // AML element ID → FPB.JS element ID (for cross-refs)
+
+  for (const procIE of allProcessIEs) {
+    parseProcess(procIE, allProcessIEs, processRefObjMap, poRefObjMap, processEntries, processIdMap, amlToFpbId);
+  }
+
+  // ── Post-processing: resolve cross-process references ──────────────
+  // FPB.JS convention: PO ID = child process ID (they share the same ID).
+  // Build PO FPB.JS ID → child process FPB.JS ID mapping, then unify.
+  const poFpbToChildFpb = new Map(); // PO FPB.JS ID → child process FPB.JS ID
+
+  for (const entry of processEntries) {
+    for (const elem of entry.elementDataInformation) {
+      if (elem.$type === 'fpb:ProcessOperator' && elem._amlId) {
+        const childProcessAmlId = poRefObjMap.get(elem._amlId);
+        if (childProcessAmlId) {
+          const childFpbId = processIdMap.get(childProcessAmlId);
+          if (childFpbId) {
+            poFpbToChildFpb.set(elem.id, childFpbId);
+          }
+        }
+      }
+    }
+  }
+
+  for (const entry of processEntries) {
+    const proc = entry.process;
+
+    // isDecomposedProcessOperator: resolve AML PO ID → FPB.JS PO ID
+    if (proc.isDecomposedProcessOperator) {
+      const poFpbId = amlToFpbId.get(proc.isDecomposedProcessOperator);
+      proc.isDecomposedProcessOperator = poFpbId || proc.isDecomposedProcessOperator;
+      proc.parent = proc.isDecomposedProcessOperator;
+
+      // FPB.JS convention: child process ID = PO ID
+      proc.id = proc.isDecomposedProcessOperator;
+    }
+
+    // decomposedView on POs: set to PO's own ID (= child process ID in FPB.JS)
+    for (const elem of entry.elementDataInformation) {
+      if (elem.$type === 'fpb:ProcessOperator' && elem.decomposedView) {
+        elem.decomposedView = elem.id; // FPB.JS: decomposedView = PO's own ID
+        delete elem._amlId;
+      }
+    }
+
+    // consistsOfProcesses: collect decomposedView IDs (= PO IDs)
+    proc.consistsOfProcesses = entry.elementDataInformation
+      .filter(e => e.decomposedView)
+      .map(e => e.decomposedView);
+  }
 
   // Build Project header
+  const entryProcessFpbId = processIdMap.get(entryProcess['@_ID']);
   const project = {
     $type: 'fpb:Project',
-    name: 'FPBJS_Project',
+    name: ih['@_Name'] || 'FPBJS_Project',
     targetNamespace: 'http://www.hsu-ifa.de/fpbjs',
-    entryPoint: entryProcessId,
+    entryPoint: entryProcessFpbId,
   };
 
   return [project, ...processEntries];
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// Process parser (recursive for decomposition)
+// Process parser
 // ══════════════════════════════════════════════════════════════════════════
 
-/**
- * Parse a FPD_Process InternalElement into a process entry.
- * @returns {string} The process ID assigned to this process
- */
-function parseProcess(processIE, parentProcessId, processEntries) {
+function parseProcess(processIE, allProcessIEs, processRefObjMap, poRefObjMap, processEntries, processIdMap, amlToFpbId) {
   const children = processIE.InternalElement || [];
   const links = processIE.InternalLink || [];
 
@@ -73,7 +151,6 @@ function parseProcess(processIE, parentProcessId, processEntries) {
   });
 
   // ── Build interface → element lookup for link resolution ───────────
-  // interfaceId → { elementId, direction, flowType, interfaceClass }
   const interfaceMap = new Map();
 
   // ── Parse object elements ──────────────────────────────────────────
@@ -86,14 +163,14 @@ function parseProcess(processIE, parentProcessId, processEntries) {
   // Process SystemLimit first
   let systemLimitId = null;
   if (systemLimitIE) {
-    const slName = systemLimitIE['@_Name'] || 'SystemLimit';
+    const slName = parseShortName(systemLimitIE) || systemLimitIE['@_Name'] || 'SystemLimit';
     systemLimitId = generateId();
-    const slVisual = parseVisualAttr(systemLimitIE);
+    const slVisual = parseViewInformation(systemLimitIE);
 
     elementDataInformation.push({
       $type: 'fpb:SystemLimit',
       id: systemLimitId,
-      elementsContainer: [], // filled later
+      elementsContainer: [],
       name: slName,
     });
 
@@ -107,22 +184,34 @@ function parseProcess(processIE, parentProcessId, processEntries) {
     }
   }
 
-  // Assign a process ID
-  // For the entry process, use a fresh ID. For decomposed processes, reuse the PO's ID (as FPB.JS does)
-  const processId = parentProcessId || generateId();
+  // Assign process ID
+  // For child processes (with refObj to parent PO), use the PO's element ID
+  const processRefObj = getRefObjValue(processIE);
+  let processId;
+  if (processRefObj) {
+    // This is a child process — use same ID approach as FPB.JS
+    processId = generateId();
+  } else {
+    processId = generateId();
+  }
+  processIdMap.set(processIE['@_ID'], processId);
 
-  // Parse each object IE
-  const elementIdMap = new Map(); // AML IE Name/ID → assigned FPB.JS ID (for consistency)
+  // Determine parent PO FPB.JS ID (for isDecomposedProcessOperator)
+  const parentPOId = processRefObj ? processRefObj : null;
+
+  // ── Parse each object IE ──────────────────────────────────────────
+  const elementIdMap = new Map(); // AML IE ID → assigned FPB.JS ID
 
   for (const ie of objectIEs) {
     const sucPath = ie['@_RefBaseSystemUnitPath'];
     const fpbType = SUC_TO_ELEMENT[sucPath];
     if (!fpbType || fpbType === 'fpb:SystemLimit' || fpbType === 'fpb:Process') continue;
 
-    const elemId = parseIdentificationId(ie) || generateId();
-    const name = ie['@_Name'] || '';
+    const elemId = generateId();
+    const name = parseShortName(ie) || ie['@_Name'] || '';
 
     elementIdMap.set(ie['@_ID'], elemId);
+    amlToFpbId.set(ie['@_ID'], elemId);
 
     // Collect ExternalInterfaces for this element
     const extInterfaces = ie.ExternalInterface || [];
@@ -140,13 +229,15 @@ function parseProcess(processIE, parentProcessId, processEntries) {
       }
     }
 
-    // Check for decomposition (nested FPD_Process)
-    const nestedProcess = findByRefSUC(ie.InternalElement || [], 'FPD_SystemUnitClassLib/FPD_Process');
+    // Check for decomposition via refObj
     let decomposedView = null;
-    if (nestedProcess) {
-      // Recursively parse the child process, using this PO's ID
-      decomposedView = elemId;
-      parseProcess(nestedProcess, elemId, processEntries);
+    let amlIdForPostProcess = null;
+    if (fpbType === 'fpb:ProcessOperator') {
+      const poRefObj = getRefObjValue(ie);
+      if (poRefObj) {
+        decomposedView = '__pending__'; // Resolved in post-processing
+        amlIdForPostProcess = ie['@_ID'];
+      }
     }
 
     // Build element data
@@ -164,7 +255,6 @@ function parseProcess(processIE, parentProcessId, processEntries) {
     // Characteristics
     elemData.characteristics = parseCharacteristics(ie);
 
-    // Flow-related properties (filled after link processing)
     elemData.incoming = [];
     elemData.outgoing = [];
     elemData.isAssignedTo = [];
@@ -172,12 +262,13 @@ function parseProcess(processIE, parentProcessId, processEntries) {
 
     if (decomposedView) {
       elemData.decomposedView = decomposedView;
+      elemData._amlId = amlIdForPostProcess; // Temp: for post-processing resolution
     }
 
     elementDataInformation.push(elemData);
 
     // Visual
-    const visual = parseVisualAttr(ie);
+    const visual = parseViewInformation(ie);
     if (visual) {
       elementVisualInformation.push({
         id: elemId,
@@ -187,7 +278,7 @@ function parseProcess(processIE, parentProcessId, processEntries) {
       });
     }
 
-    // Track IDs for process metadata
+    // Track IDs
     elementsContainerIds.push(elemId);
     if (['fpb:Product', 'fpb:Energy', 'fpb:Information'].includes(fpbType)) {
       stateIds.push(elemId);
@@ -198,7 +289,7 @@ function parseProcess(processIE, parentProcessId, processEntries) {
   }
 
   // ── Parse InternalLinks → Flows ────────────────────────────────────
-  const flowDataMap = new Map(); // flowId → flow data object
+  const flowDataMap = new Map();
 
   for (const link of links) {
     const sideAId = link['@_RefPartnerSideA'];
@@ -208,14 +299,13 @@ function parseProcess(processIE, parentProcessId, processEntries) {
     const sideB = interfaceMap.get(sideBId);
     if (!sideA || !sideB) continue;
 
-    // SideA should be Out, SideB should be In
+    // For Usage (both sides are 'out' in INTERFACE_TO_FLOW), SideA = source
     const outSide = sideA.direction === 'out' ? sideA : sideB;
     const inSide = sideA.direction === 'in' ? sideA : sideB;
 
     const flowId = generateId();
     const flowType = outSide.flowType;
 
-    // Build flow data
     const flowData = {
       $type: flowType,
       id: flowId,
@@ -223,7 +313,6 @@ function parseProcess(processIE, parentProcessId, processEntries) {
       targetRef: inSide.elementId,
     };
 
-    // inTandemWith will be computed after all flows are created
     if (flowType !== 'fpb:Flow' && flowType !== 'fpb:Usage') {
       flowData.inTandemWith = [];
     }
@@ -244,17 +333,10 @@ function parseProcess(processIE, parentProcessId, processEntries) {
     // Update element references
     const sourceElem = elementDataInformation.find(e => e.id === outSide.elementId);
     const targetElem = elementDataInformation.find(e => e.id === inSide.elementId);
-    if (sourceElem) {
-      sourceElem.outgoing.push(flowId);
-      if (flowType !== 'fpb:Usage') {
-        // For flows, target isAssignedTo source PO (or vice versa)
-      }
-    }
-    if (targetElem) {
-      targetElem.incoming.push(flowId);
-    }
+    if (sourceElem) sourceElem.outgoing.push(flowId);
+    if (targetElem) targetElem.incoming.push(flowId);
 
-    // isAssignedTo: states are assigned to POs they connect to
+    // isAssignedTo
     if (sourceElem && ['fpb:Product', 'fpb:Energy', 'fpb:Information'].includes(sourceElem.$type)) {
       if (targetElem && targetElem.$type === 'fpb:ProcessOperator') {
         if (!sourceElem.isAssignedTo.includes(targetElem.id)) {
@@ -269,7 +351,6 @@ function parseProcess(processIE, parentProcessId, processEntries) {
         }
       }
     }
-    // Usage: PO isAssignedTo TR and TR isAssignedTo PO
     if (flowType === 'fpb:Usage') {
       if (sourceElem && targetElem) {
         if (!sourceElem.isAssignedTo.includes(targetElem.id)) {
@@ -281,15 +362,13 @@ function parseProcess(processIE, parentProcessId, processEntries) {
       }
     }
 
-    // Add flow to elements container
     elementsContainerIds.push(flowId);
   }
 
   // ── Compute inTandemWith ───────────────────────────────────────────
-  // Flows sharing the same source form a tandem group
-  const sourceGroups = new Map(); // sourceId → [flowId, ...]
+  const sourceGroups = new Map();
   for (const [flowId, flow] of flowDataMap) {
-    if (flow.inTandemWith === undefined) continue; // Skip Flow and Usage
+    if (flow.inTandemWith === undefined) continue;
     const key = flow.sourceRef;
     if (!sourceGroups.has(key)) sourceGroups.set(key, []);
     sourceGroups.get(key).push(flowId);
@@ -302,7 +381,6 @@ function parseProcess(processIE, parentProcessId, processEntries) {
     }
   }
 
-  // Add all flow data to elementDataInformation
   for (const flow of flowDataMap.values()) {
     elementDataInformation.push(flow);
   }
@@ -310,9 +388,7 @@ function parseProcess(processIE, parentProcessId, processEntries) {
   // ── Update SystemLimit's elementsContainer ─────────────────────────
   if (systemLimitId) {
     const sl = elementDataInformation.find(e => e.id === systemLimitId);
-    if (sl) {
-      sl.elementsContainer = elementsContainerIds;
-    }
+    if (sl) sl.elementsContainer = elementsContainerIds;
   }
 
   // ── Build process entry ────────────────────────────────────────────
@@ -324,23 +400,18 @@ function parseProcess(processIE, parentProcessId, processEntries) {
         ? [systemLimitId, ...elementDataInformation.filter(e =>
           e.$type === 'fpb:TechnicalResource').map(e => e.id)]
         : [],
-      isDecomposedProcessOperator: parentProcessId || null,
+      isDecomposedProcessOperator: parentPOId || null,
       consistsOfStates: stateIds,
       consistsOfSystemLimit: systemLimitId,
-      consistsOfProcesses: [], // filled if there are decomposed POs
+      consistsOfProcesses: [],
       consistsOfProcessOperator: poIds,
-      parent: parentProcessId || null, // will be patched for entry process
+      parent: parentPOId || null,
     },
     elementDataInformation,
     elementVisualInformation,
   };
 
-  // Track decomposed child processes
-  for (const elemData of elementDataInformation) {
-    if (elemData.decomposedView) {
-      processEntry.process.consistsOfProcesses.push(elemData.decomposedView);
-    }
-  }
+  // consistsOfProcesses is resolved in post-processing
 
   processEntries.push(processEntry);
   return processId;
@@ -371,11 +442,18 @@ function getSubAttrValue(parent, name) {
   return getAttrValue(sub);
 }
 
-function parseIdentificationId(ie) {
+function getRefObjValue(ie) {
+  const refObjAttr = getAttr(ie, 'refObj');
+  if (!refObjAttr) return null;
+  const val = getAttrValue(refObjAttr);
+  return val || null;
+}
+
+function parseShortName(ie) {
   const ident = getAttr(ie, 'Identification');
   if (!ident) return null;
-  const uid = getSubAttrValue(ident, 'uniqueIdent');
-  return uid || null;
+  const sn = getSubAttrValue(ident, 'shortName');
+  return sn || null;
 }
 
 function parseIdentification(ie) {
@@ -402,9 +480,9 @@ function parseCharacteristics(ie) {
     if (!cAttr['@_Name']?.startsWith('Characteristic')) continue;
     const c = {};
 
-    const cIdent = getAttr(cAttr, 'Identification');
+    const cIdent = getAttr(cAttr, 'Category');
     if (cIdent) {
-      c.identification = {
+      c.category = {
         uniqueIdent: getSubAttrValue(cIdent, 'uniqueIdent'),
         longName: getSubAttrValue(cIdent, 'longName'),
         shortName: getSubAttrValue(cIdent, 'shortName'),
@@ -439,15 +517,18 @@ function parseCharacteristics(ie) {
   return characteristics;
 }
 
-function parseVisualAttr(ie) {
-  const visual = getAttr(ie, 'Visual');
-  if (!visual) return null;
+/**
+ * Parse ViewInformation (FPD_Bounds) from an InternalElement.
+ */
+function parseViewInformation(ie) {
+  const vi = getAttr(ie, 'ViewInformation');
+  if (!vi) return null;
 
-  const pos = getAttr(visual, 'position');
+  const pos = getAttr(vi, 'position');
   const x = pos ? parseFloat(getSubAttrValue(pos, 'x')) : 0;
   const y = pos ? parseFloat(getSubAttrValue(pos, 'y')) : 0;
-  const width = parseFloat(getSubAttrValue(visual, 'width')) || 0;
-  const height = parseFloat(getSubAttrValue(visual, 'height')) || 0;
+  const width = parseFloat(getSubAttrValue(vi, 'width')) || 0;
+  const height = parseFloat(getSubAttrValue(vi, 'height')) || 0;
 
   if (!width && !height && !x && !y) return null;
 
@@ -466,13 +547,16 @@ function parsePortCoordinate(extIf) {
   return { x, y };
 }
 
+/**
+ * Parse Waypoint_1, Waypoint_2, ... from an ExternalInterface.
+ */
 function parseWaypoints(extIf) {
   const attrs = extIf.Attribute || [];
   const waypoints = [];
 
   for (const attr of attrs) {
     const name = attr['@_Name'];
-    if (!name || !name.startsWith('FPD_Waypoint')) continue;
+    if (!name || !name.startsWith('Waypoint_')) continue;
 
     const pos = getAttr(attr, 'position');
     if (!pos) continue;
@@ -481,9 +565,9 @@ function parseWaypoints(extIf) {
     const y = parseFloat(getSubAttrValue(pos, 'y'));
     if (isNaN(x) || isNaN(y)) continue;
 
-    // Extract index from name: FPD_Waypoint → 0, FPD_Waypoint1 → 1, etc.
-    const indexStr = name.replace('FPD_Waypoint', '');
-    const index = indexStr === '' ? 0 : parseInt(indexStr, 10);
+    // Extract index from name: Waypoint_1 → 1, Waypoint_2 → 2, etc.
+    const indexStr = name.replace('Waypoint_', '');
+    const index = parseInt(indexStr, 10);
 
     waypoints.push({ index, x, y });
   }
@@ -495,8 +579,8 @@ function parseWaypoints(extIf) {
 
 /**
  * Build FPB.JS waypoint array from out-interface and in-interface data.
- * Out: PortCoordinate → first waypoint (original), waypoints → middle points
- * In: PortCoordinate → last waypoint (original)
+ * Out-port: PortCoordinate → first waypoint (original), Waypoint_N → intermediate bends
+ * In-port: PortCoordinate → last waypoint (original)
  */
 function buildWaypoints(outSide, inSide) {
   const waypoints = [];
@@ -510,7 +594,7 @@ function buildWaypoints(outSide, inSide) {
     });
   }
 
-  // Middle waypoints (from out-interface FPD_Waypoint attributes)
+  // Intermediate waypoints (from out-interface Waypoint_N attributes)
   for (const wp of outSide.waypoints || []) {
     waypoints.push({ x: wp.x, y: wp.y });
   }
@@ -529,9 +613,7 @@ function buildWaypoints(outSide, inSide) {
 
 // ── Utility ──────────────────────────────────────────────────────────────
 
-let idCounter = 0;
 function generateId() {
-  // Generate UUID-like IDs
   return randomUUID();
 }
 
