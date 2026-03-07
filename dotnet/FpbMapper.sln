@@ -1,0 +1,28 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FpbMapper.Conversion", "FpbMapper.Conversion\FpbMapper.Conversion.csproj", "{1005C54A-D647-4D9A-8462-8B321D7E1A93}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FpbMapper.Web", "FpbMapper.Web\FpbMapper.Web.csproj", "{5A5936EA-E8F2-4AE5-A003-8555AABED663}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{1005C54A-D647-4D9A-8462-8B321D7E1A93}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{1005C54A-D647-4D9A-8462-8B321D7E1A93}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{1005C54A-D647-4D9A-8462-8B321D7E1A93}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{1005C54A-D647-4D9A-8462-8B321D7E1A93}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5A5936EA-E8F2-4AE5-A003-8555AABED663}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5A5936EA-E8F2-4AE5-A003-8555AABED663}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5A5936EA-E8F2-4AE5-A003-8555AABED663}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5A5936EA-E8F2-4AE5-A003-8555AABED663}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

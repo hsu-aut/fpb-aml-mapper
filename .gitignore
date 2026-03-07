@@ -1,4 +1,12 @@
 node_modules/
 *.aml
 !examples/*.aml
-roundtrip.json
+roundtrip*.json
+nul
+.env
+
+# .NET build artifacts
+dotnet/*/bin/
+dotnet/*/obj/
+dotnet/publish/
+dotnet/deploy.zip

@@ -1,48 +1,37 @@
 const express = require('express');
 const path = require('path');
-const { jsonToAml } = require('./src/json-to-aml.js');
-const { amlToJson } = require('./src/aml-to-json.js');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// CORS - allow cross-origin requests (e.g. fpbjs.net → aml.fpbjs.net)
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Headers', 'Content-Type');
-  if (req.method === 'OPTIONS') return res.sendStatus(204);
-  next();
-});
-
-// Parse text bodies up to 10MB
-app.use(express.text({ type: '*/*', limit: '10mb' }));
+const DOTNET_API = process.env.DOTNET_API || 'http://localhost:5000';
 
 // Static frontend
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ── API Endpoints ────────────────────────────────────────────────────────
-
-app.post('/api/to-aml', (req, res) => {
+// Proxy /api/* to .NET backend (Aml.Engine)
+app.post('/api/:direction', async (req, res) => {
   try {
-    const json = JSON.parse(req.body);
-    const aml = jsonToAml(json);
-    res.type('application/xml').send(aml);
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const body = Buffer.concat(chunks);
+
+    const resp = await fetch(`${DOTNET_API}/api/${req.params.direction}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body,
+    });
+
+    const result = await resp.text();
+    res.status(resp.status)
+       .type(resp.headers.get('content-type'))
+       .send(result);
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    res.status(502).json({ error: 'Conversion backend unavailable: ' + err.message });
   }
 });
-
-app.post('/api/to-json', (req, res) => {
-  try {
-    const json = amlToJson(req.body);
-    res.type('application/json').send(JSON.stringify(json, null, 4));
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-
-// ── Start ────────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
-  console.log(`FPB-AML Mapper running at http://localhost:${PORT}`);
+  console.log(`FPB-AML Mapper (proxy) running at http://localhost:${PORT}`);
+  console.log(`Backend: ${DOTNET_API}`);
 });
