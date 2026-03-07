@@ -7,6 +7,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FpbMapper.Conversion", "Fpb
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FpbMapper.Web", "FpbMapper.Web\FpbMapper.Web.csproj", "{5A5936EA-E8F2-4AE5-A003-8555AABED663}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FpbMapper.Tests", "FpbMapper.Tests\FpbMapper.Tests.csproj", "{F3824BC7-E2D8-45F8-88B7-AF8931318E49}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -24,5 +26,9 @@ Global
 		{5A5936EA-E8F2-4AE5-A003-8555AABED663}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{5A5936EA-E8F2-4AE5-A003-8555AABED663}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{5A5936EA-E8F2-4AE5-A003-8555AABED663}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F3824BC7-E2D8-45F8-88B7-AF8931318E49}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F3824BC7-E2D8-45F8-88B7-AF8931318E49}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F3824BC7-E2D8-45F8-88B7-AF8931318E49}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F3824BC7-E2D8-45F8-88B7-AF8931318E49}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal
