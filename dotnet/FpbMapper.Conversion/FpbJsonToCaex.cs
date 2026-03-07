@@ -147,8 +147,8 @@ public static class FpbJsonToCaex
                 SetViewInformation(slIE, slVisual);
         }
 
-        // Collect interface IDs for InternalLinks
-        var linkMap = new Dictionary<string, (string? OutIfId, string? InIfId, string? OutIeId, string? InIeId)>();
+        // Collect ExternalInterface references for InternalLinks
+        var linkMap = new Dictionary<string, (ExternalInterfaceType? OutIf, ExternalInterfaceType? InIf)>();
         var ifaceCounters = new Dictionary<string, Dictionary<string, int>>();
 
         string GetNextInterfaceName(string elementId, string baseName)
@@ -276,9 +276,9 @@ public static class FpbJsonToCaex
                     }
 
                     if (!linkMap.ContainsKey(flow.Id))
-                        linkMap[flow.Id] = (null, null, null, null);
+                        linkMap[flow.Id] = (null, null);
                     var cur = linkMap[flow.Id];
-                    linkMap[flow.Id] = (ifaceId, cur.InIfId, elemAmlId, cur.InIeId);
+                    linkMap[flow.Id] = (extIf, cur.InIf);
                 }
             }
 
@@ -309,18 +309,17 @@ public static class FpbJsonToCaex
                     }
 
                     if (!linkMap.ContainsKey(flow.Id))
-                        linkMap[flow.Id] = (null, null, null, null);
+                        linkMap[flow.Id] = (null, null);
                     var cur = linkMap[flow.Id];
-                    linkMap[flow.Id] = (cur.OutIfId, ifaceId, cur.OutIeId, elemAmlId);
+                    linkMap[flow.Id] = (cur.OutIf, extIf);
                 }
             }
         }
 
-        // InternalLinks
-        foreach (var (flowId, ids) in linkMap)
+        // InternalLinks — use AInterface/BInterface for correct CAEX path resolution
+        foreach (var (flowId, ifs) in linkMap)
         {
-            if (ids.OutIfId == null || ids.InIfId == null) continue;
-            if (ids.OutIeId == null || ids.InIeId == null) continue;
+            if (ifs.OutIf == null || ifs.InIf == null) continue;
 
             var flow = dataMap.GetValueOrDefault(flowId);
             var sourceData = flow?.SourceRef != null ? dataMap.GetValueOrDefault(flow.SourceRef) : null;
@@ -333,8 +332,8 @@ public static class FpbJsonToCaex
                 : $"{sourceName}_to_{targetName}";
 
             var link = procIE.InternalLink.Append(linkName);
-            link.RefPartnerSideA = $"{ids.OutIeId}:{ids.OutIfId}";
-            link.RefPartnerSideB = $"{ids.InIeId}:{ids.InIfId}";
+            link.AInterface = ifs.OutIf;
+            link.BInterface = ifs.InIf;
         }
     }
 
