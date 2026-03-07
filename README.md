@@ -1,6 +1,6 @@
 # fpb-aml-mapper
 
-Bidirectional mapping between [FPB.JS](https://fpbjs.net) JSON and [AutomationML](https://www.automationml.org/) (CAEX 3.0) based on VDI 3682.
+Bidirectional mapping between [FPB.js](https://fpbjs.net) JSON and [AutomationML](https://www.automationml.org/) (CAEX 3.0) based on VDI 3682.
 
 The conversion uses the official [Aml.Engine](https://www.nuget.org/packages/Aml.Engine) SDK for CAEX-conformant output: proper library generation (RCL, SUCL, ICL, ATL), class instantiation via `CreateClassInstance()`, and automatic `RoleRequirements` on all `InternalElement` nodes.
 
@@ -42,8 +42,8 @@ az webapp deploy --resource-group <rg> --name <app> --src-path deploy.zip --type
 
 | Endpoint | Input | Output |
 |----------|-------|--------|
-| `POST /api/to-aml` | FPB.JS JSON (`text/plain`) | AutomationML (`application/xml`) |
-| `POST /api/to-json` | AutomationML (`text/plain`) | FPB.JS JSON (`application/json`) |
+| `POST /api/to-aml` | FPB.js JSON (`text/plain`) | AutomationML (`application/xml`) |
+| `POST /api/to-json` | AutomationML (`text/plain`) | FPB.js JSON (`application/json`) |
 
 ## Node.js Proxy
 

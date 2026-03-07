@@ -1,9 +1,10 @@
 <!DOCTYPE html>
-<html lang="de">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>FPB ↔ AML Mapper</title>
+<link rel="icon" type="image/png" href="/favicon.png">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background: #f5f5f5; color: #333; }
@@ -106,6 +107,7 @@
 <header>
   <h1>FPB ↔ AML Mapper</h1>
   <span>VDI 3682 · CAEX 3.0</span>
+  <button class="btn btn-secondary" onclick="loadExample()" style="margin-left:auto;padding:0.3rem 0.8rem;font-size:0.8rem;">Load Example</button>
 </header>
 
 <div class="container">
@@ -123,14 +125,14 @@
     <!-- Input -->
     <div class="panel">
       <div class="panel-header">
-        <h2 id="input-label">Input (FPB.JS JSON)</h2>
+        <h2 id="input-label">Input (FPB.js JSON)</h2>
         <button class="btn btn-secondary" onclick="clearInput()" style="padding:0.3rem 0.7rem;font-size:0.8rem;">Clear</button>
       </div>
       <div id="drop-zone" class="drop-zone" onclick="document.getElementById('file-input').click()">
-        Datei hierher ziehen oder klicken
+        Drop file here or click to upload
         <input type="file" id="file-input" accept=".json,.aml,.xml">
       </div>
-      <textarea id="input" placeholder="Oder hier einfügen..."></textarea>
+      <textarea id="input" placeholder="Or paste here..."></textarea>
     </div>
 
     <!-- Output -->
@@ -143,17 +145,17 @@
         </div>
       </div>
       <div id="progress" class="progress-bar"><div class="progress-fill"></div></div>
-      <textarea id="output" readonly placeholder="Ergebnis erscheint hier..."></textarea>
+      <textarea id="output" readonly placeholder="Result appears here..."></textarea>
     </div>
   </div>
 
   <!-- Convert button -->
   <div class="actions">
-    <button class="btn btn-primary" id="btn-convert" onclick="convert()">Konvertieren</button>
+    <button class="btn btn-primary" id="btn-convert" onclick="convert()">Convert</button>
   </div>
 
   <div class="info">
-    Powered by Aml.Engine · VDI 3682 · <a href="https://github.com/hsu-aut/fpb-aml-mapper" target="_blank" style="color:#888;">GitHub</a>
+    Powered by Aml.Engine · VDI 3682 · <a href="https://github.com/hsu-aut/fpb-aml-mapper" target="_blank" style="color:#888;">GitHub</a> · <a href="https://www.fpbjs.net" target="_blank" style="color:#888;">FPB.js</a>
   </div>
 </div>
 
@@ -164,8 +166,8 @@ function setDirection(dir) {
   direction = dir;
   document.getElementById('btn-to-aml').classList.toggle('active', dir === 'to-aml');
   document.getElementById('btn-to-json').classList.toggle('active', dir === 'to-json');
-  document.getElementById('input-label').textContent = dir === 'to-aml' ? 'Input (FPB.JS JSON)' : 'Input (AutomationML)';
-  document.getElementById('output-label').textContent = dir === 'to-aml' ? 'Output (AutomationML)' : 'Output (FPB.JS JSON)';
+  document.getElementById('input-label').textContent = dir === 'to-aml' ? 'Input (FPB.js JSON)' : 'Input (AutomationML)';
+  document.getElementById('output-label').textContent = dir === 'to-aml' ? 'Output (AutomationML)' : 'Output (FPB.js JSON)';
   document.getElementById('file-input').accept = dir === 'to-aml' ? '.json' : '.aml,.xml';
   hideError();
 }
@@ -193,9 +195,13 @@ function showError(msg) {
 const dropZone = document.getElementById('drop-zone');
 const fileInput = document.getElementById('file-input');
 const inputArea = document.getElementById('input');
+let inputFileName = '';
 
 fileInput.addEventListener('change', (e) => {
-  if (e.target.files[0]) readFile(e.target.files[0]);
+  if (e.target.files[0]) {
+    inputFileName = e.target.files[0].name.replace(/\.[^.]+$/, '');
+    readFile(e.target.files[0]);
+  }
 });
 
 dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
@@ -225,7 +231,7 @@ inputArea.addEventListener('input', () => {
 // Convert
 async function convert() {
   const input = inputArea.value.trim();
-  if (!input) { showError('Kein Input vorhanden.'); return; }
+  if (!input) { showError('No input provided.'); return; }
 
   const btn = document.getElementById('btn-convert');
   const progress = document.getElementById('progress');
@@ -251,7 +257,7 @@ async function convert() {
     document.getElementById('btn-copy').disabled = false;
     document.getElementById('btn-download').disabled = false;
   } catch (err) {
-    showError('Fehler: ' + err.message);
+    showError('Error: ' + err.message);
   } finally {
     btn.classList.remove('loading');
     btn.disabled = false;
@@ -264,7 +270,7 @@ function copyOutput() {
   const output = document.getElementById('output');
   navigator.clipboard.writeText(output.value).then(() => {
     const btn = document.getElementById('btn-copy');
-    btn.textContent = 'Kopiert!';
+    btn.textContent = 'Copied!';
     setTimeout(() => btn.textContent = 'Copy', 1500);
   });
 }
@@ -275,12 +281,28 @@ function downloadOutput() {
   if (!output) return;
   const ext = direction === 'to-aml' ? 'aml' : 'json';
   const mime = direction === 'to-aml' ? 'application/xml' : 'application/json';
+  const baseName = inputFileName || 'converted';
   const blob = new Blob([output], { type: mime });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `converted.${ext}`;
+  a.download = `${baseName}.${ext}`;
   a.click();
   URL.revokeObjectURL(a.href);
+}
+
+// Load example
+async function loadExample() {
+  try {
+    const resp = await fetch('/example.json');
+    const text = await resp.text();
+    inputArea.value = text;
+    inputFileName = 'Temperieren';
+    dropZone.classList.add('hidden');
+    setDirection('to-aml');
+    hideError();
+  } catch (err) {
+    showError('Could not load example.');
+  }
 }
 
 // Keyboard shortcut
