@@ -2,96 +2,69 @@
 
 Bidirectional mapping between [FPB.JS](https://fpbjs.net) JSON and [AutomationML](https://www.automationml.org/) (CAEX 3.0) based on VDI 3682.
 
-Two implementations are included:
+The conversion uses the official [Aml.Engine](https://www.nuget.org/packages/Aml.Engine) SDK for CAEX-conformant output: proper library generation (RCL, SUCL, ICL, ATL), class instantiation via `CreateClassInstance()`, and automatic `RoleRequirements` on all `InternalElement` nodes.
 
-- **JavaScript** (standalone CLI + library) in `src/`
-- **.NET / Aml.Engine** (web API) in `dotnet/`
+## Live
 
-The JS version uses fast-xml-parser for XML handling. The .NET version uses the official Aml.Engine SDK, which produces cleaner CAEX output and handles edge cases (library generation, GUID normalization) more robustly.
+**[aml.fpbjs.net](https://aml.fpbjs.net)** — Web UI for drag & drop conversion.
 
-## JavaScript
+## Architecture
 
-### CLI
-
-```bash
-npm install
-
-# FPB.JS JSON -> AutomationML
-node index.js to-aml input.json output.aml
-
-# AutomationML -> FPB.JS JSON
-node index.js to-json input.aml output.json
 ```
-
-### Programmatic
-
-```js
-import { jsonToAml } from './src/json-to-aml.js';
-import { amlToJson } from './src/aml-to-json.js';
-
-const aml = jsonToAml(fpbJsonArray);
-const json = amlToJson(amlXmlString);
+Browser (aml.fpbjs.net)
+  └── Node.js proxy (server.js, Plesk)
+        └── POST /api/to-aml | /api/to-json
+              └── .NET 8 API (Azure App Service)
+                    └── Aml.Engine SDK
 ```
 
 ## .NET Backend
 
-The `dotnet/` folder contains an ASP.NET Core web API that wraps the Aml.Engine-based conversion.
+The `dotnet/` folder contains the ASP.NET Core web API with the Aml.Engine-based conversion.
 
-### Build & Run
+### Build & Run locally
 
 ```bash
 cd dotnet
 dotnet run --project FpbMapper.Web
 ```
 
-Starts on `http://localhost:5000` by default.
-
-### Endpoints
-
-```
-POST /api/to-aml   # JSON body (text/plain) -> AML response (application/xml)
-POST /api/to-json   # AML body (text/plain)  -> JSON response (application/json)
-```
-
-### Deploy
+### Deploy to Azure
 
 ```bash
 cd dotnet
 dotnet publish FpbMapper.Web -c Release -o publish
+cd publish && zip -r ../deploy.zip . && cd ..
+az webapp deploy --resource-group <rg> --name <app> --src-path deploy.zip --type zip
 ```
 
-The `publish/` folder can be deployed to any host that supports .NET 8 (Azure App Service, Linux VM, Docker, etc.).
+### API Endpoints
 
-## Proxy Server (Optional)
+| Endpoint | Input | Output |
+|----------|-------|--------|
+| `POST /api/to-aml` | FPB.JS JSON (`text/plain`) | AutomationML (`application/xml`) |
+| `POST /api/to-json` | AutomationML (`text/plain`) | FPB.JS JSON (`application/json`) |
 
-`server.js` is a lightweight Express proxy that serves a web UI on port 3000 and forwards `/api/*` requests to the .NET backend.
+## Node.js Proxy
+
+`server.js` is a lightweight Express proxy that serves the web UI and forwards `/api/*` requests to the .NET backend. Requires the `DOTNET_API` environment variable.
 
 ```bash
-# Point to your .NET backend
-export DOTNET_API=http://localhost:5000
-
-npm start
+DOTNET_API=https://your-backend-url npm start
 ```
-
-Useful if you want a single origin for frontend + API, e.g. behind a webhoster that runs Node.js.
-
-## CORS
-
-The .NET backend allows requests from `*.fpbjs.net` and `localhost`. If you self-host, adjust the CORS policy in `dotnet/FpbMapper.Web/Program.cs`.
 
 ## Structure
 
 ```
-src/
-├── mappings.js          # Type mappings (FPB <-> AML)
-├── json-to-aml.js       # FPB.JS JSON -> CAEX 3.0
-├── aml-to-json.js       # CAEX 3.0 -> FPB.JS JSON
-└── aml-libraries.js     # FPD library definitions
-
+server.js                    # Node.js proxy (Plesk)
 dotnet/
 ├── FpbMapper.sln
-├── FpbMapper.Conversion/ # Conversion logic (Aml.Engine)
-└── FpbMapper.Web/        # ASP.NET Core API wrapper
+├── FpbMapper.Conversion/    # Conversion logic (Aml.Engine)
+│   ├── FpbJsonToCaex.cs     # JSON -> CAEX 3.0
+│   ├── CaexToFpbJson.cs     # CAEX 3.0 -> JSON
+│   ├── FpdLibraries.cs      # FPD library definitions
+│   └── FpbMappings.cs       # Type mappings
+└── FpbMapper.Web/           # ASP.NET Core API
 ```
 
 ## License

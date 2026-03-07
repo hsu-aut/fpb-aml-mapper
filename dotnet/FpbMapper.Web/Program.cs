@@ -18,8 +18,6 @@ builder.Services.AddCors(options =>
 var app = builder.Build();
 
 app.UseCors();
-app.UseDefaultFiles();
-app.UseStaticFiles();
 
 // JSON -> AML
 app.MapPost("/api/to-aml", async (HttpRequest req) =>
