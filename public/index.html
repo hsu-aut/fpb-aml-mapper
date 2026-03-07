@@ -209,7 +209,10 @@ dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover
 dropZone.addEventListener('drop', (e) => {
   e.preventDefault();
   dropZone.classList.remove('dragover');
-  if (e.dataTransfer.files[0]) readFile(e.dataTransfer.files[0]);
+  if (e.dataTransfer.files[0]) {
+    inputFileName = e.dataTransfer.files[0].name.replace(/\.[^.]+$/, '');
+    readFile(e.dataTransfer.files[0]);
+  }
 });
 
 function readFile(file) {
