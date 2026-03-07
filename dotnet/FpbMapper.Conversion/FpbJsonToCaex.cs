@@ -12,14 +12,16 @@ namespace FpbMapper.Conversion;
 /// </summary>
 public static class FpbJsonToCaex
 {
-    public static CAEXDocument Convert(string json)
+    public static ConversionResult<CAEXDocument> Convert(string json)
     {
         var (project, entries) = FpbJsonParser.Parse(json);
         return Convert(project, entries);
     }
 
-    public static CAEXDocument Convert(FpbProject project, List<ProcessEntry> entries)
+    public static ConversionResult<CAEXDocument> Convert(FpbProject project, List<ProcessEntry> entries)
     {
+        var warnings = new List<string>();
+        Validate(project, entries, warnings);
         var processMap = entries.ToDictionary(e => e.Process.Id, e => e);
         var entryProcessId = project.EntryPoint;
 
@@ -70,14 +72,24 @@ public static class FpbJsonToCaex
 
         foreach (var pid in allProcessIds)
         {
-            BuildProcess(ih, pid, processMap, processAmlIds, poToChildProcess, usedAmlIds, sucLookup);
+            BuildProcess(ih, pid, processMap, processAmlIds, poToChildProcess, usedAmlIds, sucLookup, warnings);
         }
 
-        return doc;
+        return new ConversionResult<CAEXDocument>(doc, warnings);
     }
 
-    private static List<string> CollectProcessIds(string processId, Dictionary<string, ProcessEntry> processMap)
+    private const int MaxDecompositionDepth = 50;
+
+    private static List<string> CollectProcessIds(string processId, Dictionary<string, ProcessEntry> processMap,
+        HashSet<string>? visited = null, int depth = 0)
     {
+        if (depth > MaxDecompositionDepth)
+            throw new InvalidOperationException($"Decomposition depth exceeds {MaxDecompositionDepth} levels — possible circular reference");
+
+        visited ??= new HashSet<string>();
+        if (!visited.Add(processId))
+            throw new InvalidOperationException($"Circular decomposition detected: process '{processId}' references itself");
+
         var result = new List<string> { processId };
         if (!processMap.TryGetValue(processId, out var entry)) return result;
 
@@ -86,7 +98,7 @@ public static class FpbJsonToCaex
             if (obj.Type == "fpb:ProcessOperator" && !string.IsNullOrEmpty(obj.DecomposedView))
             {
                 if (processMap.ContainsKey(obj.DecomposedView))
-                    result.AddRange(CollectProcessIds(obj.DecomposedView, processMap));
+                    result.AddRange(CollectProcessIds(obj.DecomposedView, processMap, visited, depth + 1));
             }
         }
         return result;
@@ -103,7 +115,8 @@ public static class FpbJsonToCaex
         Dictionary<string, string> processAmlIds,
         Dictionary<string, string> poToChildProcess,
         HashSet<string> usedAmlIds,
-        Dictionary<string, SystemUnitFamilyType> sucLookup)
+        Dictionary<string, SystemUnitFamilyType> sucLookup,
+        List<string> warnings)
     {
         if (!processMap.TryGetValue(processId, out var entry)) return;
 
@@ -319,7 +332,11 @@ public static class FpbJsonToCaex
         // InternalLinks — use AInterface/BInterface for correct CAEX path resolution
         foreach (var (flowId, ifs) in linkMap)
         {
-            if (ifs.OutIf == null || ifs.InIf == null) continue;
+            if (ifs.OutIf == null || ifs.InIf == null)
+            {
+                warnings.Add($"Flow '{flowId}' skipped: missing {(ifs.OutIf == null ? "source" : "target")} interface.");
+                continue;
+            }
 
             var flow = dataMap.GetValueOrDefault(flowId);
             var sourceData = flow?.SourceRef != null ? dataMap.GetValueOrDefault(flow.SourceRef) : null;
@@ -521,5 +538,42 @@ public static class FpbJsonToCaex
         if (id.StartsWith('{') && id.EndsWith('}')) return id;
         if (Guid.TryParse(id, out var guid)) return guid.ToString("B");
         return id;
+    }
+
+    // ========================================================================
+    // Input validation
+    // ========================================================================
+
+    private static void Validate(FpbProject project, List<ProcessEntry> entries, List<string> warnings)
+    {
+        if (entries.Count == 0)
+            throw new InvalidOperationException("No process entries found in JSON input.");
+
+        if (string.IsNullOrEmpty(project.EntryPoint))
+            throw new InvalidOperationException("Project has no entryPoint.");
+
+        if (!entries.Any(e => e.Process.Id == project.EntryPoint))
+            throw new InvalidOperationException($"Entry point '{project.EntryPoint}' not found in process entries.");
+
+        foreach (var entry in entries)
+        {
+            var hasSL = entry.ElementData.Any(e => e.Type == "fpb:SystemLimit");
+            if (!hasSL)
+                warnings.Add($"Process '{entry.Process.Id}' has no SystemLimit.");
+
+            var hasPO = entry.ElementData.Any(e => e.Type == "fpb:ProcessOperator");
+            if (!hasPO)
+                warnings.Add($"Process '{entry.Process.Id}' has no ProcessOperator.");
+
+            // Check for flows referencing unknown elements
+            var elementIds = entry.ElementData.Select(e => e.Id).ToHashSet();
+            foreach (var flow in entry.ElementData.Where(e => ConnectionTypes.Contains(e.Type)))
+            {
+                if (!string.IsNullOrEmpty(flow.SourceRef) && !elementIds.Contains(flow.SourceRef))
+                    warnings.Add($"Flow '{flow.Id}' references unknown source '{flow.SourceRef}'.");
+                if (!string.IsNullOrEmpty(flow.TargetRef) && !elementIds.Contains(flow.TargetRef))
+                    warnings.Add($"Flow '{flow.Id}' references unknown target '{flow.TargetRef}'.");
+            }
+        }
     }
 }

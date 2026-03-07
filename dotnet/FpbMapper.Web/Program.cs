@@ -13,27 +13,31 @@ builder.Services.AddCors(options =>
                     || host == "localhost";
             })
             .AllowAnyHeader()
-            .AllowAnyMethod());
+            .AllowAnyMethod()
+            .WithExposedHeaders("X-Conversion-Warnings"));
 });
 var app = builder.Build();
 
 app.UseCors();
 
 // JSON -> AML
-app.MapPost("/api/to-aml", async (HttpRequest req) =>
+app.MapPost("/api/to-aml", async (HttpContext ctx) =>
 {
-    using var reader = new StreamReader(req.Body);
+    using var reader = new StreamReader(ctx.Request.Body);
     var json = await reader.ReadToEndAsync();
 
     try
     {
-        var doc = FpbJsonToCaex.Convert(json);
+        var result = FpbJsonToCaex.Convert(json);
         var tmpFile = Path.GetTempFileName();
         try
         {
-            doc.SaveToFile(tmpFile, true);
+            result.Value.SaveToFile(tmpFile, true);
             var xml = await File.ReadAllTextAsync(tmpFile);
-            return Results.Text(xml, "application/xml");
+            if (result.Warnings.Count > 0)
+                ctx.Response.Headers["X-Conversion-Warnings"] = System.Text.Json.JsonSerializer.Serialize(result.Warnings);
+            ctx.Response.ContentType = "application/xml";
+            await ctx.Response.WriteAsync(xml);
         }
         finally
         {
@@ -42,25 +46,32 @@ app.MapPost("/api/to-aml", async (HttpRequest req) =>
     }
     catch (Exception ex)
     {
-        return Results.Json(new { error = ex.Message }, statusCode: 400);
+        ctx.Response.StatusCode = 400;
+        ctx.Response.ContentType = "application/json";
+        await ctx.Response.WriteAsJsonAsync(new { error = ex.Message });
     }
 });
 
 // AML -> JSON
-app.MapPost("/api/to-json", async (HttpRequest req) =>
+app.MapPost("/api/to-json", async (HttpContext ctx) =>
 {
-    using var reader = new StreamReader(req.Body);
+    using var reader = new StreamReader(ctx.Request.Body);
     var aml = await reader.ReadToEndAsync();
 
     try
     {
         var doc = CAEXDocument.LoadFromString(aml);
-        var json = CaexToFpbJson.Convert(doc);
-        return Results.Text(json, "application/json");
+        var result = CaexToFpbJson.Convert(doc);
+        if (result.Warnings.Count > 0)
+            ctx.Response.Headers["X-Conversion-Warnings"] = System.Text.Json.JsonSerializer.Serialize(result.Warnings);
+        ctx.Response.ContentType = "application/json";
+        await ctx.Response.WriteAsync(result.Value);
     }
     catch (Exception ex)
     {
-        return Results.Json(new { error = ex.Message }, statusCode: 400);
+        ctx.Response.StatusCode = 400;
+        ctx.Response.ContentType = "application/json";
+        await ctx.Response.WriteAsJsonAsync(new { error = ex.Message });
     }
 });
 

@@ -67,12 +67,13 @@
   .btn-secondary:hover { background: #ddd; }
   .btn-secondary:disabled { opacity: 0.4; cursor: not-allowed; }
 
-  /* Error */
+  /* Error / Warning */
   .error {
     background: #fff0f0; border: 1px solid #ffcccc; color: #cc0000; padding: 0.75rem 1rem;
     border-radius: 6px; margin-bottom: 1rem; font-size: 0.85rem; display: none;
   }
   .error.visible { display: block; }
+  .error.warning { background: #fff8e1; border-color: #ffe082; color: #8d6e00; }
 
   /* Loading */
   .btn-primary.loading { position: relative; color: transparent; }
@@ -185,9 +186,10 @@ function hideError() {
   document.getElementById('error').classList.remove('visible');
 }
 
-function showError(msg) {
+function showError(msg, isWarning) {
   const el = document.getElementById('error');
   el.textContent = msg;
+  el.classList.toggle('warning', !!isWarning);
   el.classList.add('visible');
 }
 
@@ -251,14 +253,25 @@ async function convert() {
     });
 
     if (!resp.ok) {
-      const err = await resp.json();
-      throw new Error(err.error || `HTTP ${resp.status}`);
+      const text = await resp.text();
+      let msg = `HTTP ${resp.status}`;
+      try { const j = JSON.parse(text); msg = j.error || j.title || msg; } catch { msg = text || msg; }
+      throw new Error(msg);
     }
 
     const result = await resp.text();
     document.getElementById('output').value = result;
     document.getElementById('btn-copy').disabled = false;
     document.getElementById('btn-download').disabled = false;
+
+    // Show warnings if any
+    const warningsHeader = resp.headers.get('x-conversion-warnings');
+    if (warningsHeader) {
+      try {
+        const warnings = JSON.parse(warningsHeader);
+        if (warnings.length > 0) showError('Warnings: ' + warnings.join('; '), true);
+      } catch {}
+    }
   } catch (err) {
     showError('Error: ' + err.message);
   } finally {

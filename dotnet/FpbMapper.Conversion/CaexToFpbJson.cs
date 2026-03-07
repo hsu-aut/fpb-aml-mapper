@@ -9,8 +9,9 @@ namespace FpbMapper.Conversion;
 /// </summary>
 public static class CaexToFpbJson
 {
-    public static string Convert(CAEXDocument doc)
+    public static ConversionResult<string> Convert(CAEXDocument doc)
     {
+        var warnings = new List<string>();
         var caex = doc.CAEXFile;
 
         // Find the first InstanceHierarchy
@@ -58,7 +59,7 @@ public static class CaexToFpbJson
         foreach (var procIE in allProcessIEs)
         {
             ParseProcess(procIE, allProcessIEs, processRefObjMap, poRefObjMap,
-                processEntries, processIdMap, amlToFpbId);
+                processEntries, processIdMap, amlToFpbId, warnings);
         }
 
         // Post-processing: resolve cross-process references
@@ -125,11 +126,12 @@ public static class CaexToFpbJson
         };
         result.AddRange(processEntries);
 
-        return JsonSerializer.Serialize(result, new JsonSerializerOptions
+        var json = JsonSerializer.Serialize(result, new JsonSerializerOptions
         {
             WriteIndented = true,
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         });
+        return new ConversionResult<string>(json, warnings);
     }
 
     // ========================================================================
@@ -143,7 +145,8 @@ public static class CaexToFpbJson
         Dictionary<string, string> poRefObjMap,
         List<Dictionary<string, object>> processEntries,
         Dictionary<string, string> processIdMap,
-        Dictionary<string, string> amlToFpbId)
+        Dictionary<string, string> amlToFpbId,
+        List<string> warnings)
     {
         var elementDataInformation = new List<Dictionary<string, object>>();
         var elementVisualInformation = new List<Dictionary<string, object>>();
@@ -292,8 +295,16 @@ public static class CaexToFpbJson
             var sideAId = ExtractInterfaceId(link.RefPartnerSideA);
             var sideBId = ExtractInterfaceId(link.RefPartnerSideB);
 
-            if (!interfaceMap.TryGetValue(sideAId, out var sideA)) continue;
-            if (!interfaceMap.TryGetValue(sideBId, out var sideB)) continue;
+            if (!interfaceMap.TryGetValue(sideAId, out var sideA))
+            {
+                warnings.Add($"InternalLink '{link.Name}' skipped: interface '{sideAId}' not found.");
+                continue;
+            }
+            if (!interfaceMap.TryGetValue(sideBId, out var sideB))
+            {
+                warnings.Add($"InternalLink '{link.Name}' skipped: interface '{sideBId}' not found.");
+                continue;
+            }
 
             var outSide = sideA.Direction == "out" ? sideA : sideB;
             var inSide = sideA.Direction == "in" ? sideA : sideB;
