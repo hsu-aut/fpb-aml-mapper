@@ -223,17 +223,17 @@ public static class FpbJsonToCaex
             SetIdentification(ie, obj.Identification, elemName);
             SetCharacteristics(ie, obj.Characteristics);
 
-            // refObj
+            // refProcess (on ProcessOperator only)
             if (obj.Type == "fpb:ProcessOperator")
             {
                 if (!string.IsNullOrEmpty(obj.DecomposedView) && poToChildProcess.ContainsKey(obj.Id))
                 {
                     var childProcessId = poToChildProcess[obj.Id];
-                    SetAttrValue(ie, "refObj", processAmlIds.GetValueOrDefault(childProcessId, ""));
+                    SetAttrValue(ie, "refProcess", processAmlIds.GetValueOrDefault(childProcessId, ""));
                 }
                 else
                 {
-                    SetAttrValue(ie, "refObj", "");
+                    SetAttrValue(ie, "refProcess", "");
                 }
             }
             else if (StateTypes.Contains(obj.Type))
@@ -362,7 +362,18 @@ public static class FpbJsonToCaex
     {
         if (!sucLookup.TryGetValue(sucName, out var suc))
             throw new InvalidOperationException($"SystemUnitClass '{sucName}' not found in library");
-        return (InternalElementType)suc.CreateClassInstance(sucName);
+        var ie = (InternalElementType)suc.CreateClassInstance(sucName);
+
+        // CreateClassInstance only copies the first SupportedRoleClass as RoleRequirement.
+        // Add any additional SupportedRoleClasses (e.g. AML base roles) manually.
+        var existingRRs = new HashSet<string>(ie.RoleRequirements.Select(r => r.RefBaseRoleClassPath));
+        foreach (var src in suc.SupportedRoleClass)
+        {
+            if (!existingRRs.Contains(src.RefRoleClassPath))
+                ie.RoleRequirements.Append().RefBaseRoleClassPath = src.RefRoleClassPath;
+        }
+
+        return ie;
     }
 
     // ========================================================================

@@ -13,11 +13,25 @@ public static class FpdLibraries
 {
     public static void EnsureLibraries(CAEXFileType caex)
     {
+        EnsureExternalReference(caex);
         EnsureInterfaceClassLib(caex);
         EnsureRoleClassLib(caex);
         EnsureAttributeTypeLib(caex);
         EnsureDIAttributeTypeLib(caex);
         EnsureSystemUnitClassLib(caex);
+    }
+
+    // -- 0. ExternalReference to AML Base Libraries ----------------------------
+
+    private static void EnsureExternalReference(CAEXFileType caex)
+    {
+        // Check if the reference already exists
+        foreach (var er in caex.ExternalReference)
+            if (er.Alias == AmlBase.Alias) return;
+
+        var extRef = caex.ExternalReference.Append();
+        extRef.Alias = AmlBase.Alias;
+        extRef.Path = AmlBase.Path;
     }
 
     // -- 1. InterfaceClassLib ------------------------------------------------
@@ -33,6 +47,7 @@ public static class FpdLibraries
         var port = icl.InterfaceClass.Append("FPD_Port");
         port.Description = "Abstract base port for all FPD connections.";
         port.Version = "1.0.0";
+        port.RefBaseClassPath = AmlBase.Port;
         AddPointAttr(port, "PortCoordinate");
 
         foreach (var name in new[]
@@ -59,10 +74,11 @@ public static class FpdLibraries
         rcl.Description = "Semantic model of the FPD per VDI/VDE 3682. Flat layout with explicit inheritance via RefBaseClassPath.";
         rcl.Version = "1.0.0";
 
-        // FPD_Process
+        // FPD_Process (inherits AML Structure)
         var proc = rcl.RoleClass.Append("FPD_Process");
         proc.Description = "Process (Part 2, Fig. 2). Aggregates states (2..*), system limit (1), and process operators (1..*).";
         proc.Version = "1.0.0";
+        proc.RefBaseClassPath = AmlBase.Structure;
         AddRefObjAttr(proc, "IDREF to the parent process operator whose decomposition this process represents.");
 
         // FPD_SystemLimit
@@ -72,10 +88,11 @@ public static class FpdLibraries
         AddIdentificationAttr(sl);
         AddBoundsAttr(sl, "ViewInformation");
 
-        // FPD_Object (abstract base)
+        // FPD_Object (abstract base, inherits AML BaseRole)
         var obj = rcl.RoleClass.Append("FPD_Object");
         obj.Description = "Abstract base for all FPB objects (Part 1, p. 4: product, energy, information, process operator, technical resource).";
         obj.Version = "1.0.0";
+        obj.RefBaseClassPath = AmlBase.BaseRole;
         AddIdentificationAttr(obj);
         var charAttr = AddAttr(obj, "Characteristics", "xs:string");
         charAttr.Description = "Container for characteristics (Part 2, Fig. 3).";
@@ -101,7 +118,7 @@ public static class FpdLibraries
         po.Description = "Process operator (Part 2, Fig. 2). Inherits Identification and Characteristics from FPD_Object.";
         po.Version = "1.0.0";
         po.RefBaseClassPath = $"{LibNames.RoleClassLib}/FPD_Object";
-        AddRefObjAttr(po, "IDREF to the child process that decomposes this operator. Empty if the operator is not further decomposed.");
+        AddRefProcessAttr(po, "IDREF to the child process that decomposes this operator. Empty if the operator is not further decomposed.");
 
         // FPD_TechnicalResource (inherits FPD_Object)
         var tr = rcl.RoleClass.Append("FPD_TechnicalResource");
@@ -195,6 +212,7 @@ public static class FpdLibraries
         procSuc.Version = "1.0.0";
         AddRefObjAttr(procSuc, null);
         procSuc.SupportedRoleClass.Append().RefRoleClassPath = $"{LibNames.RoleClassLib}/FPD_Process";
+        procSuc.SupportedRoleClass.Append().RefRoleClassPath = AmlBase.Structure;
 
         // FPD_SystemLimit (standalone)
         var slSuc = sucl.SystemUnitClass.Append("FPD_SystemLimit");
@@ -219,26 +237,31 @@ public static class FpdLibraries
         stateSuc.SupportedRoleClass.Append().RefRoleClassPath = $"{LibNames.RoleClassLib}/FPD_State";
 
         // Concrete states (inherit FPD_State)
+        // Only FPD_Product gets AML base Product role (Energy/Information have no AML base equivalent)
         foreach (var name in new[] { "FPD_Product", "FPD_Energy", "FPD_Information" })
         {
             var suc = sucl.SystemUnitClass.Append(name);
             suc.Version = "1.0.0";
             suc.RefBaseClassPath = $"{LibNames.SystemUnitClassLib}/FPD_State";
             suc.SupportedRoleClass.Append().RefRoleClassPath = $"{LibNames.RoleClassLib}/{name}";
+            if (name == "FPD_Product")
+                suc.SupportedRoleClass.Append().RefRoleClassPath = AmlBase.Product;
         }
 
-        // FPD_ProcessOperator (inherits FPD_Object, adds refObj)
+        // FPD_ProcessOperator (inherits FPD_Object, adds refProcess)
         var poSuc = sucl.SystemUnitClass.Append("FPD_ProcessOperator");
         poSuc.Version = "1.0.0";
         poSuc.RefBaseClassPath = $"{LibNames.SystemUnitClassLib}/FPD_Object";
-        AddRefObjAttr(poSuc, null);
+        AddRefProcessAttr(poSuc, null);
         poSuc.SupportedRoleClass.Append().RefRoleClassPath = $"{LibNames.RoleClassLib}/FPD_ProcessOperator";
+        poSuc.SupportedRoleClass.Append().RefRoleClassPath = AmlBase.Process;
 
         // FPD_TechnicalResource (inherits FPD_Object)
         var trSuc = sucl.SystemUnitClass.Append("FPD_TechnicalResource");
         trSuc.Version = "1.0.0";
         trSuc.RefBaseClassPath = $"{LibNames.SystemUnitClassLib}/FPD_Object";
         trSuc.SupportedRoleClass.Append().RefRoleClassPath = $"{LibNames.RoleClassLib}/FPD_TechnicalResource";
+        trSuc.SupportedRoleClass.Append().RefRoleClassPath = AmlBase.Resource;
     }
 
     // -- Helpers --------------------------------------------------------------
@@ -284,6 +307,15 @@ public static class FpdLibraries
     private static void AddRefObjAttr(IObjectWithAttributes parent, string? description)
     {
         var attr = parent.Attribute.Append("refObj");
+        attr.AttributeDataType = "xs:string";
+        attr.RefAttributeType = AttrRefs.RefObj;
+        if (description != null)
+            attr.Description = description;
+    }
+
+    private static void AddRefProcessAttr(IObjectWithAttributes parent, string? description)
+    {
+        var attr = parent.Attribute.Append("refProcess");
         attr.AttributeDataType = "xs:string";
         attr.RefAttributeType = AttrRefs.RefObj;
         if (description != null)

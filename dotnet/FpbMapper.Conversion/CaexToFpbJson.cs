@@ -40,9 +40,9 @@ public static class CaexToFpbJson
             {
                 if (ie.RefBaseSystemUnitPath == ElementToSuc["fpb:ProcessOperator"])
                 {
-                    var poRefObj = GetRefObjValue(ie);
-                    if (poRefObj != null)
-                        poRefObjMap[ie.ID] = poRefObj;
+                    var poRefProcess = GetRefProcessValue(ie);
+                    if (poRefProcess != null)
+                        poRefObjMap[ie.ID] = poRefProcess;
                 }
             }
         }
@@ -238,8 +238,8 @@ public static class CaexToFpbJson
             string? amlIdForPostProcess = null;
             if (fpbType == "fpb:ProcessOperator")
             {
-                var poRefObj = GetRefObjValue(ie);
-                if (poRefObj != null)
+                var poRefProcess = GetRefProcessValue(ie);
+                if (poRefProcess != null)
                 {
                     decomposedView = "__pending__";
                     amlIdForPostProcess = ie.ID;
@@ -430,6 +430,14 @@ public static class CaexToFpbJson
     private static string? GetRefObjValue(InternalElementType ie)
     {
         var attr = ie.Attribute["refObj"];
+        if (attr == null) return null;
+        var val = attr.Value;
+        return string.IsNullOrEmpty(val) ? null : val;
+    }
+
+    private static string? GetRefProcessValue(InternalElementType ie)
+    {
+        var attr = ie.Attribute["refProcess"];
         if (attr == null) return null;
         var val = attr.Value;
         return string.IsNullOrEmpty(val) ? null : val;

@@ -83,4 +83,21 @@ public static class FpbMappings
         public const string AttributeTypeLib     = "VDI_FPD_AttributeTypeLib";
         public const string DIAttributeTypeLib   = "VDI_FPD_DI_AttributeTypeLib";
     }
+
+    // AML Base Library references (AutomationML Edition 2, v2.11.0)
+    public static class AmlBase
+    {
+        public const string Alias = "AutomationMLBaseLibrariesAMLEd22_11_0";
+        public const string Path  = "https://9t4kqL7NX8JsW6o@automationml.ovgu.de/public.php/webdav/AutomationML_Base_Libraries_AMLEd2_2.11.0.aml";
+
+        // InterfaceClassLib base
+        public const string Port      = Alias + "@AutomationMLInterfaceClassLib/AutomationMLBaseInterface/Port";
+
+        // RoleClassLib bases
+        public const string BaseRole  = Alias + "@AutomationMLBaseRoleClassLib/AutomationMLBaseRole";
+        public const string Structure = Alias + "@AutomationMLBaseRoleClassLib/AutomationMLBaseRole/Structure";
+        public const string Product   = Alias + "@AutomationMLBaseRoleClassLib/AutomationMLBaseRole/Product";
+        public const string Process   = Alias + "@AutomationMLBaseRoleClassLib/AutomationMLBaseRole/Process";
+        public const string Resource  = Alias + "@AutomationMLBaseRoleClassLib/AutomationMLBaseRole/Resource";
+    }
 }
