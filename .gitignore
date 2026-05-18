@@ -1,6 +1,7 @@
 node_modules/
 *.aml
 !examples/*.aml
+!public/*.aml
 roundtrip*.json
 nul
 .env

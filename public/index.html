@@ -101,6 +101,26 @@
   }
 
   .info { font-size: 0.8rem; color: #888; text-align: center; padding-top: 0.5rem; }
+
+  /* Modal */
+  .modal-overlay {
+    display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;
+  }
+  .modal-overlay.visible { display: flex; }
+  .modal {
+    background: #fff; border-radius: 10px; padding: 2rem; max-width: 520px; width: 90%;
+    position: relative; box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+  }
+  .modal h2 { font-size: 1.1rem; font-weight: 600; margin-bottom: 1rem; color: #1a1a2e; }
+  .modal p { font-size: 0.9rem; line-height: 1.5; color: #444; margin-bottom: 1rem; }
+  .modal-close {
+    position: absolute; top: 0.75rem; right: 1rem; background: none; border: none;
+    font-size: 1.5rem; cursor: pointer; color: #888;
+  }
+  .modal-close:hover { color: #333; }
+  .modal-actions { display: flex; gap: 0.75rem; margin-top: 1.5rem; }
+  .modal-actions .btn { flex: 1; justify-content: center; }
 </style>
 </head>
 <body>
@@ -108,8 +128,27 @@
 <header>
   <h1>FPB ↔ AML Mapper</h1>
   <span>VDI 3682 · CAEX 3.0</span>
-  <button class="btn btn-secondary" onclick="loadExample()" style="margin-left:auto;padding:0.3rem 0.8rem;font-size:0.8rem;">Load Example</button>
+  <a href="/VDI_FPD_DomainLibrary_v0.5.aml" download class="btn btn-secondary" style="margin-left:auto;padding:0.3rem 0.8rem;font-size:0.8rem;text-decoration:none;">Download AML Library</a>
+  <button class="btn btn-secondary" onclick="openFeedback()" style="padding:0.3rem 0.8rem;font-size:0.8rem;">Feedback</button>
+  <button class="btn btn-secondary" onclick="loadExample()" style="padding:0.3rem 0.8rem;font-size:0.8rem;">Load Example</button>
 </header>
+
+<!-- Feedback Modal -->
+<div id="feedback-modal" class="modal-overlay" onclick="closeFeedback(event)">
+  <div class="modal" onclick="event.stopPropagation()">
+    <button class="modal-close" onclick="closeFeedback()" aria-label="Close">&times;</button>
+    <h2>Feedback on the VDI 3682 AML Library</h2>
+    <p>
+      The library is currently a candidate for Part&nbsp;3 of VDI/VDE&nbsp;3682 and under review in the GMA Technical Committee&nbsp;2.19.
+      We invite the community to share feedback on the library and its design decisions before the standard is finalized.
+    </p>
+    <p>You can provide feedback in two ways:</p>
+    <div class="modal-actions">
+      <a href="https://github.com/hsu-aut/fpb-aml-mapper/issues" target="_blank" class="btn btn-primary" style="text-decoration:none;">Open GitHub Issue</a>
+      <a href="mailto:hamied.nabizada@hsu.hamburg%2Crainer.drath@hs-pforzheim.de?subject=Feedback%20VDI%203682%20AML%20Library" class="btn btn-primary" style="text-decoration:none;">Send Email</a>
+    </div>
+  </div>
+</div>
 
 <div class="container">
   <!-- Direction Toggle -->
@@ -305,6 +344,18 @@ function downloadOutput() {
   a.click();
   URL.revokeObjectURL(a.href);
 }
+
+// Feedback modal
+function openFeedback() {
+  document.getElementById('feedback-modal').classList.add('visible');
+}
+function closeFeedback(e) {
+  if (e && e.target.id !== 'feedback-modal' && e.type !== undefined) return;
+  document.getElementById('feedback-modal').classList.remove('visible');
+}
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') document.getElementById('feedback-modal').classList.remove('visible');
+});
 
 // Load example
 async function loadExample() {
