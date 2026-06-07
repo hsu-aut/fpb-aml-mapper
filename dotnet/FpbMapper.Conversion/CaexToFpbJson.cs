@@ -9,14 +9,43 @@ namespace FpbMapper.Conversion;
 /// </summary>
 public static class CaexToFpbJson
 {
+    /// <summary>
+    /// Convert the first InstanceHierarchy in <paramref name="doc"/> to FPB.JS JSON.
+    /// Kept for legacy callers (Web mapper, file-based export). Multi-IH users
+    /// should call the <see cref="Convert(CAEXDocument, InstanceHierarchyType)"/>
+    /// overload and target each IH explicitly.
+    /// </summary>
     public static ConversionResult<string> Convert(CAEXDocument doc)
     {
-        var warnings = new List<string>();
         var caex = doc.CAEXFile;
-
-        // Find the first InstanceHierarchy
         var ih = caex.InstanceHierarchy.FirstOrDefault()
             ?? throw new InvalidOperationException("No InstanceHierarchy found");
+        return Convert(doc, ih);
+    }
+
+    /// <summary>
+    /// Find every InstanceHierarchy in <paramref name="doc"/> that holds at least
+    /// one FPD_Process IE. Plugins surface one viewer-tab per IH in the returned
+    /// order so the user can edit each FPD process independently.
+    /// </summary>
+    public static IReadOnlyList<InstanceHierarchyType> FindFpdInstanceHierarchies(CAEXDocument doc)
+    {
+        if (doc?.CAEXFile == null) return Array.Empty<InstanceHierarchyType>();
+        var processSuc = ElementToSuc["fpb:Process"];
+        return doc.CAEXFile.InstanceHierarchy
+            .Where(ih => ih.InternalElement.Any(ie => ie.RefBaseSystemUnitPath == processSuc))
+            .ToList();
+    }
+
+    /// <summary>
+    /// Convert a specific InstanceHierarchy to FPB.JS JSON. Use when a document
+    /// holds several independent FPD models that the plugin renders side-by-side.
+    /// </summary>
+    public static ConversionResult<string> Convert(CAEXDocument doc, InstanceHierarchyType ih)
+    {
+        var warnings = new List<string>();
+        if (ih == null)
+            throw new ArgumentNullException(nameof(ih));
 
         // Collect all FPD_Process InternalElements (flat in IH)
         var allProcessIEs = ih.InternalElement
@@ -29,6 +58,7 @@ public static class CaexToFpbJson
         // Build refObj lookups
         var processRefObjMap = new Dictionary<string, string>(); // process AML ID -> parent PO ID
         var poRefObjMap = new Dictionary<string, string>();       // PO AML ID -> child process AML ID
+        var poToProcessAmlId = new Dictionary<string, string>();  // PO AML ID -> parent process AML ID
 
         foreach (var procIE in allProcessIEs)
         {
@@ -40,6 +70,7 @@ public static class CaexToFpbJson
             {
                 if (ie.RefBaseSystemUnitPath == ElementToSuc["fpb:ProcessOperator"])
                 {
+                    poToProcessAmlId[ie.ID] = procIE.ID;
                     var poRefProcess = GetRefProcessValue(ie);
                     if (poRefProcess != null)
                         poRefObjMap[ie.ID] = poRefProcess;
@@ -86,11 +117,25 @@ public static class CaexToFpbJson
             var proc = (Dictionary<string, object>)entry["process"];
 
             // isDecomposedProcessOperator: resolve AML PO ID -> FPB.JS PO ID
+            // parent should point at the process containing the parent PO, NOT the PO itself.
+            // If any lookup fails we still emit a brace-free ID via NormalizeId so the
+            // JSON stays consistent with Phase 2.A (no {xxx} sneaks through).
             if (proc.TryGetValue("isDecomposedProcessOperator", out var iDPO) && iDPO is string idpo && !string.IsNullOrEmpty(idpo))
             {
-                if (amlToFpbId.TryGetValue(idpo, out var poFpbId))
-                    proc["isDecomposedProcessOperator"] = poFpbId;
-                proc["parent"] = proc["isDecomposedProcessOperator"];
+                proc["isDecomposedProcessOperator"] = amlToFpbId.TryGetValue(idpo, out var poFpbId)
+                    ? poFpbId
+                    : NormalizeId(idpo);
+
+                if (poToProcessAmlId.TryGetValue(idpo, out var parentProcAmlId)
+                    && processIdMap.TryGetValue(parentProcAmlId, out var parentProcFpbId))
+                {
+                    proc["parent"] = parentProcFpbId;
+                }
+                else
+                {
+                    proc["parent"] = proc["isDecomposedProcessOperator"];
+                }
+
                 proc["id"] = proc["isDecomposedProcessOperator"];
             }
 
@@ -165,7 +210,7 @@ public static class CaexToFpbJson
         if (systemLimitIE != null)
         {
             var slName = ParseShortName(systemLimitIE) ?? systemLimitIE.Name ?? "SystemLimit";
-            systemLimitId = NewId();
+            systemLimitId = NormalizeId(systemLimitIE.ID);
             var slVisual = ParseViewInformation(systemLimitIE);
 
             var slData = new Dictionary<string, object>
@@ -186,8 +231,8 @@ public static class CaexToFpbJson
             }
         }
 
-        // Assign process ID
-        var processId = NewId();
+        // Assign process ID — take the AML ID (stripped) so round-trips stay stable.
+        var processId = NormalizeId(processIE.ID);
         processIdMap[processIE.ID] = processId;
 
         var processRefObj = GetRefObjValue(processIE);
@@ -210,7 +255,8 @@ public static class CaexToFpbJson
             if (!SucToElement.TryGetValue(sucPath, out var fpbType)) continue;
             if (fpbType == "fpb:SystemLimit" || fpbType == "fpb:Process") continue;
 
-            var elemId = NewId();
+            // Element ID takes the AML ID (stripped) so UpdateInPlace can match later.
+            var elemId = NormalizeId(ie.ID);
             var name = ParseShortName(ie) ?? ie.Name ?? "";
 
             elementIdMap[ie.ID] = elemId;
@@ -282,7 +328,9 @@ public static class CaexToFpbJson
                 elementVisualInformation.Add(visual);
             }
 
-            elementsContainerIds.Add(elemId);
+            // TechnicalResource lives outside the SystemLimit, not inside it
+            if (fpbType != "fpb:TechnicalResource")
+                elementsContainerIds.Add(elemId);
             if (StateTypes.Contains(fpbType)) stateIds.Add(elemId);
             if (fpbType == "fpb:ProcessOperator") poIds.Add(elemId);
         }
@@ -309,7 +357,9 @@ public static class CaexToFpbJson
             var outSide = sideA.Direction == "out" ? sideA : sideB;
             var inSide = sideA.Direction == "in" ? sideA : sideB;
 
-            var flowId = NewId();
+            // Flow ID takes the InternalLink ID (stripped) so updates can match.
+            // CAEX InternalLink IDs are optional — NormalizeId falls back to NewId().
+            var flowId = NormalizeId(link.ID);
             var flowType = outSide.FlowType;
 
             var flowData = new Dictionary<string, object>
@@ -365,7 +415,9 @@ public static class CaexToFpbJson
                 if (!tgtList.Contains((string)sourceElem["id"])) tgtList.Add((string)sourceElem["id"]);
             }
 
-            elementsContainerIds.Add(flowId);
+            // Usage connects to TechnicalResources outside the SystemLimit
+            if (flowType != "fpb:Usage")
+                elementsContainerIds.Add(flowId);
         }
 
         // Compute inTandemWith
@@ -406,7 +458,9 @@ public static class CaexToFpbJson
                 ["id"] = processId,
                 ["elementsContainer"] = systemLimitId != null
                     ? new List<string>(new[] { systemLimitId }.Concat(
-                        elementDataInformation.Where(e => (string)e["$type"] == "fpb:TechnicalResource")
+                        elementDataInformation
+                            .Where(e => (string)e["$type"] == "fpb:TechnicalResource"
+                                     || (string)e["$type"] == "fpb:Usage")
                             .Select(e => (string)e["id"])))
                     : new List<string>(),
                 ["isDecomposedProcessOperator"] = parentPOId ?? (object)"",
@@ -641,6 +695,27 @@ public static class CaexToFpbJson
     }
 
     private static string NewId() => Guid.NewGuid().ToString("B");
+
+    /// <summary>
+    /// Convert an AML element ID (typically CAEX B-format like "{xxx-yyy}") to the
+    /// raw FPB.JS-side ID format (no braces). Preserves IDs for downstream round-trips
+    /// — UpdateInPlace in FpbJsonToCaex can match by the same value back to the AML
+    /// element. Falls back to a fresh raw GUID if the AML ID is null/empty.
+    /// </summary>
+    /// <remarks>
+    /// NOTE: the fallback path must NOT call <see cref="NewId"/>, which formats as
+    /// "{xxx-yyy}". If we leaked a braced ID into the JSON output, FPB.JS would
+    /// store it internally with braces and the next UpdateInPlace lookup would
+    /// miss every connection (linkIndex keys are bare). This bit users hard on
+    /// AML files whose InternalLinks had no explicit ID.
+    /// </remarks>
+    private static string NormalizeId(string? amlId)
+    {
+        if (string.IsNullOrEmpty(amlId)) return Guid.NewGuid().ToString();  // bare, no braces
+        if (amlId.Length >= 2 && amlId[0] == '{' && amlId[^1] == '}')
+            return amlId.Substring(1, amlId.Length - 2);
+        return amlId;
+    }
 
     private class InterfaceInfo
     {
