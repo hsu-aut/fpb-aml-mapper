@@ -12,13 +12,13 @@ namespace FpbMapper.Conversion;
 /// </summary>
 public static class FpbJsonToCaex
 {
-    public static ConversionResult<CAEXDocument> Convert(string json)
+    public static ConversionResult<CAEXDocument> Convert(string json, MapperOptions? options = null)
     {
         var (project, entries) = FpbJsonParser.Parse(json);
-        return Convert(project, entries);
+        return Convert(project, entries, options);
     }
 
-    public static ConversionResult<CAEXDocument> Convert(FpbProject project, List<ProcessEntry> entries)
+    public static ConversionResult<CAEXDocument> Convert(FpbProject project, List<ProcessEntry> entries, MapperOptions? options = null)
     {
         var doc = CAEXDocument.New_CAEXDocument();
         var caex = doc.CAEXFile;
@@ -30,7 +30,7 @@ public static class FpbJsonToCaex
         sdi.OriginVersion = "0.1.0";
         sdi.LastWritingDateTime = DateTime.UtcNow;
 
-        var warnings = AppendInto(doc, project, entries);
+        var warnings = AppendInto(doc, project, entries, options);
         return new ConversionResult<CAEXDocument>(doc, warnings);
     }
 
@@ -72,21 +72,33 @@ public static class FpbJsonToCaex
         slIE.Name = "SystemLimit_" + processName.Replace(" ", "");
         procIE.Insert(slIE);
 
+        // Default visual layout — without explicit ViewInformation the FPB.JS
+        // canvas renders the SystemLimit as a 0×0 invisible box. These values
+        // give the user a reasonable empty canvas to start dropping shapes
+        // onto from the palette.
+        SetViewInformation(slIE, new VisualInfo
+        {
+            X = 100,
+            Y = 100,
+            Width = 600,
+            Height = 400,
+        });
+
         return ih;
     }
 
-    public static ConversionResult<CAEXDocument> ImportInto(CAEXDocument existing, string json)
+    public static ConversionResult<CAEXDocument> ImportInto(CAEXDocument existing, string json, MapperOptions? options = null)
     {
         var (project, entries) = FpbJsonParser.Parse(json);
-        return ImportInto(existing, project, entries);
+        return ImportInto(existing, project, entries, options);
     }
 
     /// <summary>
-    /// Inject FPD structures into an existing CAEX document. See <see cref="ImportInto(CAEXDocument,string)"/>.
+    /// Inject FPD structures into an existing CAEX document. See <see cref="ImportInto(CAEXDocument,string,MapperOptions)"/>.
     /// </summary>
-    public static ConversionResult<CAEXDocument> ImportInto(CAEXDocument existing, FpbProject project, List<ProcessEntry> entries)
+    public static ConversionResult<CAEXDocument> ImportInto(CAEXDocument existing, FpbProject project, List<ProcessEntry> entries, MapperOptions? options = null)
     {
-        var warnings = AppendInto(existing, project, entries);
+        var warnings = AppendInto(existing, project, entries, options);
         return new ConversionResult<CAEXDocument>(existing, warnings);
     }
 
@@ -102,35 +114,56 @@ public static class FpbJsonToCaex
     /// (append a fresh hierarchy) and logs a warning.
     /// </para>
     /// </summary>
-    public static ConversionResult<CAEXDocument> UpdateInPlace(CAEXDocument existing, string json)
+    public static ConversionResult<CAEXDocument> UpdateInPlace(CAEXDocument existing, string json, MapperOptions? options = null)
     {
         var (project, entries) = FpbJsonParser.Parse(json);
-        return UpdateInPlace(existing, project, entries);
+        return UpdateInPlace(existing, project, entries, targetIh: null, options);
     }
 
     /// <summary>
-    /// Same as <see cref="UpdateInPlace(CAEXDocument,string)"/> but targets a specific
-    /// InstanceHierarchy by reference. Use when the document has several FPD IHs and
-    /// each is being edited independently (e.g. one viewer-tab per IH).
+    /// Same as <see cref="UpdateInPlace(CAEXDocument,string,MapperOptions)"/> but
+    /// targets a specific InstanceHierarchy by reference. Use when the document
+    /// has several FPD IHs and each is being edited independently.
     /// </summary>
-    public static ConversionResult<CAEXDocument> UpdateInPlace(CAEXDocument existing, string json, InstanceHierarchyType targetIh)
+    public static ConversionResult<CAEXDocument> UpdateInPlace(CAEXDocument existing, string json, InstanceHierarchyType targetIh, MapperOptions? options = null)
     {
         var (project, entries) = FpbJsonParser.Parse(json);
-        return UpdateInPlace(existing, project, entries, targetIh);
+        return UpdateInPlace(existing, project, entries, targetIh, options);
     }
 
-    /// <inheritdoc cref="UpdateInPlace(CAEXDocument,string)"/>
+    /// <inheritdoc cref="UpdateInPlace(CAEXDocument,string,MapperOptions)"/>
     public static ConversionResult<CAEXDocument> UpdateInPlace(CAEXDocument existing, FpbProject project, List<ProcessEntry> entries)
-        => UpdateInPlace(existing, project, entries, targetIh: null);
+        => UpdateInPlace(existing, project, entries, targetIh: null, options: null);
 
-    /// <inheritdoc cref="UpdateInPlace(CAEXDocument,string,InstanceHierarchyType)"/>
+    /// <inheritdoc cref="UpdateInPlace(CAEXDocument,string,InstanceHierarchyType,MapperOptions)"/>
     public static ConversionResult<CAEXDocument> UpdateInPlace(
         CAEXDocument existing,
         FpbProject project,
         List<ProcessEntry> entries,
-        InstanceHierarchyType? targetIh)
+        InstanceHierarchyType? targetIh,
+        MapperOptions? options = null)
     {
         var warnings = new List<string>();
+        MapperTrace.Info(options, $"UpdateInPlace ENTRY: project='{project.Name}' entries={entries.Count}");
+
+        // Eigene Erweiterung: snapshot statistics. Tells you at a glance whether
+        // the incoming snapshot is what you'd expect (5 states + 2 POs + 3 flows
+        // etc.). Catches "FPB.JS sent us garbage" vs "Mapper dropped things".
+        if (options?.Trace != null)
+        {
+            var totalElements = entries.Sum(e => e.ElementData.Count);
+            var byType = entries
+                .SelectMany(e => e.ElementData)
+                .GroupBy(d => d.Type)
+                .OrderBy(g => g.Key)
+                .ToDictionary(g => g.Key, g => g.Count());
+            var perEntry = string.Join("; ",
+                entries.Select((e, i) => $"#{i}:{e.Process.Id.Substring(0, Math.Min(8, e.Process.Id.Length))} " +
+                                          $"(sub={!string.IsNullOrEmpty(e.Process.IsDecomposedProcessOperator)}, data={e.ElementData.Count}, visual={e.ElementVisual.Count})"));
+            var perType = string.Join(", ", byType.Select(kv => $"{kv.Key}={kv.Value}"));
+            MapperTrace.Info(options, $"  snapshot stats: totalElements={totalElements} byType=[{perType}] entries=[{perEntry}]");
+        }
+
         Validate(project, entries, warnings);
 
         var caex = existing.CAEXFile;
@@ -142,12 +175,14 @@ public static class FpbJsonToCaex
         if (fpdIH is null)
         {
             warnings.Add("No existing FPD InstanceHierarchy found — appending a fresh hierarchy instead.");
-            AppendInto(existing, project, entries);
+            MapperTrace.Info(options, "No FPD IH found — falling back to AppendInto");
+            AppendInto(existing, project, entries, options);
             return new ConversionResult<CAEXDocument>(existing, warnings);
         }
 
-        var elementIndex = BuildElementIndex(fpdIH);
+        var elementIndex = BuildElementIndex(fpdIH, options, warnings);
         var linkIndex = BuildInternalLinkIndex(fpdIH);
+        MapperTrace.Info(options, $"Target IH='{fpdIH.Name}' elementIndex.size={elementIndex.Count} linkIndex.size={linkIndex.Count}");
 
         // Build SUC lookup once — required by CreateInstance for new IEs (Phase 2.D add).
         var sucLib = caex.SystemUnitClassLib[LibNames.SystemUnitClassLib]!;
@@ -170,101 +205,173 @@ public static class FpbJsonToCaex
         var processAddedCount = 0;
         var unmatchedSkippedCount = 0;
 
-        foreach (var entry in entries)
+        // Audit-v3 M1: TWO-PASS loop.
+        //   Pass 1: resolve/add Process IEs + add/update Element IEs (NO connections).
+        //   Pass 2: process connections (now every source/target is guaranteed in elementIndex).
+        // Previously the order inside entry.ElementData was load-bearing — a flow listed
+        // before its source/target element silently failed with "not found in AML".
+        // Same shape for cross-entry decomposition: if a sub-process entry appears
+        // before the parent entry that defines its parent PO, AddProcess used to fail.
+        var procByEntryIndex = new Dictionary<int, InternalElementType?>();
+        var visualByEntryIndex = new Dictionary<int, Dictionary<string, VisualInfo>>();
+
+        // ── Pass 1: Processes + Elements ─────────────────────────────────
+        // First sub-pass: ensure all top-level entries are resolved BEFORE we
+        // try to add sub-process entries (the latter need their parent PO).
+        var orderedEntries = entries
+            .Select((e, i) => (entry: e, index: i))
+            .OrderBy(t => string.IsNullOrEmpty(t.entry.Process.IsDecomposedProcessOperator) ? 0 : 1)
+            .ToList();
+
+        foreach (var (entry, entryIndex) in orderedEntries)
         {
             var visualMap = entry.ElementVisual
                 .GroupBy(v => v.Id)
                 .ToDictionary(g => g.Key, g => g.First());
+            visualByEntryIndex[entryIndex] = visualMap;
 
-            // Find the AML Process IE this entry belongs to. Two FPB.JS conventions:
-            //   (a) Top-level process: entry.Process.Id == process AML ID (stripped).
-            //   (b) Decomposed sub-process: entry.Process.Id == parent-PO FPB-ID
-            //       (CaexToFpbJson convention); sub-process IE located via refObj.
-            // Phase 2.F: if no AML process exists yet for a decomposed entry, create
-            // a fresh FPD_Process IE bound to the parent PO via refObj/refProcess.
-            InternalElementType? procAml = ResolveProcessForEntry(fpdIH, entry, elementIndex);
+            MapperTrace.Attempt(options, "ResolveProcess",
+                $"entry.process.id='{entry.Process.Id}' isDecomposedOf='{entry.Process.IsDecomposedProcessOperator}' elementData.count={entry.ElementData.Count}");
+            InternalElementType? procAml = ResolveProcessForEntry(fpdIH, entry, elementIndex, options);
             if (procAml is null && !string.IsNullOrEmpty(entry.Process.IsDecomposedProcessOperator))
             {
-                procAml = AddProcess(fpdIH, entry.Process, elementIndex, sucLookup, warnings);
-                if (procAml is not null) processAddedCount++;
+                MapperTrace.Result(options, "ResolveProcess",
+                    $"no existing AML process for sub-process entry, attempting AddProcess(parentPo='{entry.Process.IsDecomposedProcessOperator}')");
+                var warningsBefore = warnings.Count;
+                procAml = AddProcess(fpdIH, entry.Process, elementIndex, sucLookup, warnings, options);
+                if (procAml is not null)
+                {
+                    processAddedCount++;
+                    elementIndex[StripBraces(procAml.ID)] = procAml;
+                    MapperTrace.Result(options, "AddProcess", $"created sub-process id='{procAml.ID}' for parent PO '{entry.Process.IsDecomposedProcessOperator}'");
+                }
+                else
+                {
+                    var lastWarning = warnings.Count > warningsBefore ? warnings[^1] : "(no warning recorded)";
+                    MapperTrace.Result(options, "AddProcess", $"FAILED — {lastWarning}");
+                }
             }
+            else
+            {
+                MapperTrace.Result(options, "ResolveProcess", procAml is null ? "NULL — entry will have unmatched elements" : $"found AML process '{procAml.Name}' id='{procAml.ID}'");
+            }
+            procByEntryIndex[entryIndex] = procAml;
 
+            // Add/Update ELEMENTS only (skip connections in Pass 1).
             foreach (var data in entry.ElementData)
             {
-                // Phase 2.E.1 (update existing) + Phase 2.E.2 (add new).
-                // P2 #2 — endpoint-swap detection: if the FPB.JS user reversed a flow's
-                // direction, AInterface/BInterface no longer match sourceRef/targetRef.
-                // Updating waypoints alone would silently desync; instead drop+recreate.
-                if (ConnectionTypes.Contains(data.Type))
-                {
-                    if (linkIndex.TryGetValue(data.Id, out var link))
-                    {
-                        if (LinkEndpointsMatch(link, data, elementIndex))
-                        {
-                            UpdateExistingConnection(link, data, visualMap);
-                            connectionUpdatedCount++;
-                        }
-                        else
-                        {
-                            link.Remove();
-                            if (procAml is not null
-                                && AddConnection(procAml, data, elementIndex, visualMap, warnings) is not null)
-                            {
-                                connectionAddedCount++;
-                            }
-                            else
-                            {
-                                warnings.Add($"Flow '{data.Id}' endpoints changed but could not be recreated.");
-                            }
-                        }
-                    }
-                    else if (procAml is not null)
-                    {
-                        if (AddConnection(procAml, data, elementIndex, visualMap, warnings) is not null)
-                            connectionAddedCount++;
-                    }
-                    else
-                    {
-                        warnings.Add($"Flow '{data.Id}' could not be added: no host process resolved.");
-                    }
-                    continue;
-                }
+                if (ConnectionTypes.Contains(data.Type)) continue;
 
                 if (elementIndex.TryGetValue(data.Id, out var ie))
                 {
-                    UpdateExistingElement(ie, data, visualMap);
+                    MapperTrace.Attempt(options, "UpdateElement", $"id='{data.Id}' type='{data.Type}' name='{data.Name}'");
+                    UpdateExistingElement(ie, data, visualMap, elementIndex, options);
                     updatedCount++;
+                    MapperTrace.Result(options, "UpdateElement", "ok");
                     continue;
                 }
 
-                // No matching AML element — try to add it under the matching process.
                 if (procAml is null)
                 {
                     unmatchedSkippedCount++;
+                    MapperTrace.Result(options, "ResolveElement", $"SKIP — element id='{data.Id}' type='{data.Type}' has no AML match and no host process to add it under");
                     continue;
                 }
 
-                if (AddElement(procAml, data, sucLookup, visualMap) is not null)
+                MapperTrace.Attempt(options, "AddElement", $"id='{data.Id}' type='{data.Type}' name='{data.Name}' into process='{procAml.Name}'");
+                var newIe = AddElement(procAml, data, sucLookup, visualMap, options);
+                if (newIe is not null)
                 {
                     addedCount++;
+                    elementIndex[StripBraces(newIe.ID)] = newIe;
+                    MapperTrace.Result(options, "AddElement", $"ok — registered in elementIndex as '{StripBraces(newIe.ID)}'");
                 }
                 else
                 {
                     warnings.Add($"Could not add element '{data.Id}' of type '{data.Type}' " +
                                  $"(SUC '{data.Type}' missing in library?)");
                     unmatchedSkippedCount++;
+                    MapperTrace.Result(options, "AddElement", $"FAILED — SUC '{data.Type}' missing");
                 }
             }
         }
 
-        // Phase 2.D — remove orphaned FPD elements (AML elements whose ID no longer
-        // appears in the incoming payload). Crucial: only delete FPD-classed IEs —
-        // any custom user-added IE (different RefBaseSystemUnitPath) is kept.
-        var removedCount = RemoveOrphanedFpdElements(fpdIH, elementIndex, incomingIds);
+        // ── Pass 2: Connections ─────────────────────────────────────────
+        // elementIndex is now fully populated with every Process + Element IE
+        // that this UpdateInPlace will materialize. Connection lookups by
+        // source/target can succeed regardless of where they appear in the
+        // entry.ElementData ordering — fixes the "source not in AML" warning
+        // storm we saw on Decompose round-trips.
+        // Per-element interface counters reused across the whole pass so
+        // multiple parallel flows from the same element don't collide on
+        // ExternalInterface names (audit-v3 M4).
+        var ifaceCounters = new Dictionary<string, Dictionary<string, int>>();
+        foreach (var (entry, entryIndex) in orderedEntries)
+        {
+            var procAml = procByEntryIndex.GetValueOrDefault(entryIndex);
+            var visualMap = visualByEntryIndex[entryIndex];
 
-        // Phase 2.E.2 — remove orphaned InternalLinks (flows whose ID no longer
-        // appears in the incoming payload).
+            foreach (var data in entry.ElementData)
+            {
+                if (!ConnectionTypes.Contains(data.Type)) continue;
+
+                if (linkIndex.TryGetValue(data.Id, out var link))
+                {
+                    if (LinkEndpointsMatch(link, data, elementIndex))
+                    {
+                        MapperTrace.Attempt(options, "UpdateConnection", $"flow id='{data.Id}' type='{data.Type}' (endpoints unchanged → waypoint refresh)");
+                        UpdateExistingConnection(link, data, visualMap);
+                        connectionUpdatedCount++;
+                        MapperTrace.Result(options, "UpdateConnection", "ok");
+                    }
+                    else
+                    {
+                        MapperTrace.Attempt(options, "RecreateConnection", $"flow id='{data.Id}' endpoints swapped → drop+readd");
+                        link.Remove();
+                        linkIndex.Remove(StripBraces(data.Id));
+                        if (procAml is not null
+                            && AddConnection(procAml, data, elementIndex, visualMap, warnings, ifaceCounters) is not null)
+                        {
+                            connectionAddedCount++;
+                            MapperTrace.Result(options, "RecreateConnection", "ok");
+                        }
+                        else
+                        {
+                            warnings.Add($"Flow '{data.Id}' endpoints changed but could not be recreated.");
+                            MapperTrace.Result(options, "RecreateConnection", "FAILED");
+                        }
+                    }
+                }
+                else if (procAml is not null)
+                {
+                    MapperTrace.Attempt(options, "AddConnection", $"flow id='{data.Id}' type='{data.Type}' source='{data.SourceRef}' target='{data.TargetRef}'");
+                    var warningsBefore = warnings.Count;
+                    if (AddConnection(procAml, data, elementIndex, visualMap, warnings, ifaceCounters) is not null)
+                    {
+                        connectionAddedCount++;
+                        MapperTrace.Result(options, "AddConnection", "ok");
+                    }
+                    else
+                    {
+                        var lastWarning = warnings.Count > warningsBefore ? warnings[^1] : "(no warning recorded)";
+                        MapperTrace.Result(options, "AddConnection", $"FAILED — {lastWarning}");
+                    }
+                }
+                else
+                {
+                    warnings.Add($"Flow '{data.Id}' could not be added: no host process resolved.");
+                    MapperTrace.Result(options, "AddConnection", $"SKIP — no host process for flow id='{data.Id}'");
+                }
+            }
+        }
+
+        MapperTrace.Attempt(options, "RemoveOrphans", "FPD elements not in incoming snapshot");
+        var removedCount = RemoveOrphanedFpdElements(fpdIH, elementIndex, incomingIds, options);
+        MapperTrace.Result(options, "RemoveOrphans", $"removed {removedCount} element(s)");
+
+        MapperTrace.Attempt(options, "RemoveOrphans", "InternalLinks not in incoming snapshot");
         var connectionsRemoved = RemoveOrphanedConnections(linkIndex, incomingIds);
+        MapperTrace.Result(options, "RemoveOrphans", $"removed {connectionsRemoved} link(s)");
 
         // Phase 2.F.2 — remove orphaned sub-processes (Compose case): if the FPB.JS
         // side no longer carries a decomposed entry whose parent-PO ID matches an
@@ -276,7 +383,26 @@ public static class FpbJsonToCaex
             if (!string.IsNullOrEmpty(e.Process.IsDecomposedProcessOperator))
                 incomingDecomposedParentPoIds.Add(e.Process.IsDecomposedProcessOperator);
         }
-        var processesRemoved = RemoveOrphanedSubProcesses(fpdIH, incomingDecomposedParentPoIds, elementIndex);
+        MapperTrace.Attempt(options, "RemoveOrphanSubProcesses", $"sub-processes whose parent PO no longer carries decomposedView ({incomingDecomposedParentPoIds.Count} kept-alive parent POs)");
+        var processesRemoved = RemoveOrphanedSubProcesses(fpdIH, incomingDecomposedParentPoIds, elementIndex, options);
+        MapperTrace.Result(options, "RemoveOrphanSubProcesses", $"removed {processesRemoved} sub-process(es)");
+
+        // Audit-fix #2+#3 — keep boundary-state refObj in sync across the
+        // decomposition. UpdateExistingElement / AddElement don't touch refObj
+        // on states (they don't have parent-entry context), so after the main
+        // loop we re-derive every sub-process state's refObj from the snapshot:
+        // a state is a boundary state iff the same state-ID also appears in
+        // the parent entry's ElementData. Mirrors the green-field Convert
+        // logic at lines 1186-1198.
+        MapperTrace.Attempt(options, "SyncBoundaryStateRefObjs", "post-pass re-deriving refObj on every sub-process state from the snapshot");
+        var boundarySyncs = SyncBoundaryStateRefObjs(entries, elementIndex, options);
+        MapperTrace.Result(options, "SyncBoundaryStateRefObjs", $"synced refObj on {boundarySyncs} state(s) across decomposition");
+
+        // Post-pass — keep PO ⇄ child Process names in sync. Runs after every
+        // other update so the loop order can't undo the sync.
+        MapperTrace.Attempt(options, "SyncDecompositionNames", "post-pass syncing PO name -> child Process name");
+        var nameSyncs = SyncDecompositionNamesPostPass(elementIndex, warnings, options);
+        MapperTrace.Result(options, "SyncDecompositionNames", $"synced {nameSyncs} PO ⇄ sub-process name pair(s)");
 
         warnings.Add(
             $"UpdateInPlace summary: updated={updatedCount}, added={addedCount}, " +
@@ -301,7 +427,8 @@ public static class FpbJsonToCaex
         InternalElementType parent,
         ElementData data,
         Dictionary<string, SystemUnitFamilyType> sucLookup,
-        Dictionary<string, VisualInfo> visualMap)
+        Dictionary<string, VisualInfo> visualMap,
+        MapperOptions? options = null)
     {
         if (!ElementToSuc.TryGetValue(data.Type, out var sucPath)) return null;
         var sucName = sucPath.Split('/')[1];
@@ -309,18 +436,30 @@ public static class FpbJsonToCaex
 
         var ie = CreateInstance(sucLookup, sucName);
         ie.ID = WrapBraces(data.Id);
-        ie.Name = !string.IsNullOrEmpty(data.Name) ? data.Name : sucName;
+        // Audit-v2 fix #6: use the same fallback as BuildProcess so a missing
+        // FPB.JS name yields "ProcessOperator" / "Product" / etc. consistently
+        // across green-field Convert and UpdateInPlace+AddElement code paths.
+        var typeLocalName = data.Type.Contains(':') ? data.Type.Split(':')[1] : sucName;
+        ie.Name = !string.IsNullOrEmpty(data.Name) ? data.Name : typeLocalName;
         parent.Insert(ie);
 
-        SetIdentification(ie, data.Identification, data.Name ?? "");
+        SetIdentification(ie, data.Identification, data.Name ?? "", options);
         if (visualMap.TryGetValue(data.Id, out var visual))
-            SetViewInformation(ie, visual);
+        {
+            SetViewInformation(ie, visual, options);
+        }
+        else if (data.Type == FpbTypes.SystemLimit)
+        {
+            // Audit-v2 fix #5: a freshly-added SystemLimit without visual data
+            // would render as a 0×0 invisible box in FPB.JS — same family as
+            // the v0.6.10 SystemLimit-from-CreateEmpty bug. Apply the same
+            // sensible defaults so the user gets a usable canvas.
+            SetViewInformation(ie, new VisualInfo { X = 100, Y = 100, Width = 600, Height = 400 }, options);
+            MapperTrace.Info(options, $"AddElement: SystemLimit '{ie.ID}' had no visual data in snapshot — applied default ViewInformation (100,100,600,400)");
+        }
 
-        // P2 #3 — Characteristics. Safe to call on a freshly-created IE: there are no
-        // existing characteristic attributes to duplicate (the non-idempotence flagged
-        // for UpdateExistingElement only matters when the IE already carries them).
         if (data.Characteristics != null && data.Characteristics.Count > 0)
-            SetCharacteristics(ie, data.Characteristics);
+            SetCharacteristics(ie, data.Characteristics, options);
 
         return ie;
     }
@@ -339,21 +478,29 @@ public static class FpbJsonToCaex
     private static int RemoveOrphanedFpdElements(
         InstanceHierarchyType fpdIH,
         Dictionary<string, InternalElementType> elementIndex,
-        HashSet<string> incomingIds)
+        HashSet<string> incomingIds,
+        MapperOptions? options = null)
     {
         var fpdSucPaths = new HashSet<string>(ElementToSuc.Values);
-        var processSuc = ElementToSuc["fpb:Process"];
+        var processSuc = ElementToSuc[FpbTypes.Process];
 
         var toRemove = elementIndex
             .Where(kv => !incomingIds.Contains(kv.Key)
                          && kv.Value.RefBaseSystemUnitPath is { } suc
                          && fpdSucPaths.Contains(suc)
                          && suc != processSuc)
-            .Select(kv => kv.Value)
+            .Select(kv => (Key: kv.Key, Ie: kv.Value))
             .ToList();
 
-        foreach (var ie in toRemove)
+        foreach (var (key, ie) in toRemove)
+        {
+            MapperTrace.Attempt(options, "RemoveOrphanElement",
+                $"id='{ie.ID}' name='{ie.Name}' type='{ie.RefBaseSystemUnitPath}' (no longer in incoming snapshot)");
             ie.Remove();
+            // Audit-fix #1: keep elementIndex consistent with the AML tree.
+            elementIndex.Remove(key);
+            MapperTrace.Result(options, "RemoveOrphanElement", "removed + dropped from elementIndex");
+        }
 
         return toRemove.Count;
     }
@@ -396,15 +543,17 @@ public static class FpbJsonToCaex
     private static InternalElementType? ResolveProcessForEntry(
         InstanceHierarchyType fpdIH,
         ProcessEntry entry,
-        Dictionary<string, InternalElementType> elementIndex)
+        Dictionary<string, InternalElementType> elementIndex,
+        MapperOptions? options = null)
     {
-        var processSuc = ElementToSuc["fpb:Process"];
+        var processSuc = ElementToSuc[FpbTypes.Process];
 
         // Top-level case: entry.Process.Id is directly the process AML ID.
         if (string.IsNullOrEmpty(entry.Process.IsDecomposedProcessOperator)
             && elementIndex.TryGetValue(entry.Process.Id, out var directHit)
             && directHit.RefBaseSystemUnitPath == processSuc)
         {
+            MapperTrace.Info(options, $"  ResolveProcess: matched TOP-LEVEL by ID — entry.process.id='{entry.Process.Id}' -> AML '{directHit.ID}' name='{directHit.Name}'");
             return directHit;
         }
 
@@ -412,11 +561,20 @@ public static class FpbJsonToCaex
         var parentPoId = string.IsNullOrEmpty(entry.Process.IsDecomposedProcessOperator)
             ? entry.Process.Id
             : entry.Process.IsDecomposedProcessOperator;
-        if (!elementIndex.TryGetValue(parentPoId, out var parentPo)) return null;
+        if (!elementIndex.TryGetValue(parentPoId, out var parentPo))
+        {
+            MapperTrace.Info(options, $"  ResolveProcess: parent PO '{parentPoId}' not in elementIndex — no match");
+            return null;
+        }
         var parentPoAmlId = parentPo.ID;
-        return fpdIH.InternalElement.FirstOrDefault(ie =>
+        var subHit = fpdIH.InternalElement.FirstOrDefault(ie =>
             ie.RefBaseSystemUnitPath == processSuc
-            && (ie.Attribute["refObj"]?.Value ?? "") == parentPoAmlId);
+            && (ie.GetRefObjOrDerived() ?? "") == parentPoAmlId);
+        if (subHit != null)
+            MapperTrace.Info(options, $"  ResolveProcess: matched SUB-PROCESS via refObj — parent PO '{parentPo.ID}' name='{parentPo.Name}' -> sub-process '{subHit.ID}' name='{subHit.Name}'");
+        else
+            MapperTrace.Info(options, $"  ResolveProcess: parent PO '{parentPo.ID}' has no sub-process with refObj pointing back yet — will trigger AddProcess");
+        return subHit;
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -449,11 +607,50 @@ public static class FpbJsonToCaex
     }
 
     /// <summary>Walk CAEXParent upwards and test whether <paramref name="ancestor"/> is on the path (P2 #1).</summary>
+    /// <summary>
+    /// Audit-v3 M4: produce a unique ExternalInterface name per (element, baseName)
+    /// across a single conversion pass. Mirrors BuildProcess's GetNextInterfaceName
+    /// local helper so green-field Convert and incremental UpdateInPlace produce
+    /// consistent shapes.
+    /// </summary>
+    private static string GetUniqueInterfaceName(
+        Dictionary<string, Dictionary<string, int>> counters,
+        string elementId,
+        string baseName)
+    {
+        if (!counters.TryGetValue(elementId, out var byBase))
+        {
+            byBase = new Dictionary<string, int>();
+            counters[elementId] = byBase;
+        }
+        byBase.TryGetValue(baseName, out var n);
+        n++;
+        byBase[baseName] = n;
+        return n == 1 ? baseName : $"{baseName}_{n}";
+    }
+
     private static bool IsDescendantOf(CAEXBasicObject? node, InternalElementType ancestor)
     {
         for (var n = node?.CAEXParent; n != null; n = n.CAEXParent)
             if (ReferenceEquals(n, ancestor)) return true;
         return false;
+    }
+
+    /// <summary>
+    /// Diagnostic helper: walk up from an IE until we hit a FPD_Process ancestor
+    /// (or root) so cross-process-flow warnings can name which process the
+    /// endpoint actually lives in.
+    /// </summary>
+    private static string FindHostProcessName(InternalElementType? ie)
+    {
+        if (ie == null) return "<null>";
+        var processSuc = ElementToSuc[FpbTypes.Process];
+        for (CAEXWrapper? n = ie; n != null; n = n.CAEXParent)
+        {
+            if (n is InternalElementType candidate && candidate.RefBaseSystemUnitPath == processSuc)
+                return $"{candidate.Name} (id={candidate.ID})";
+        }
+        return "<no FPD_Process ancestor>";
     }
 
     /// <summary>
@@ -466,8 +663,12 @@ public static class FpbJsonToCaex
         ElementData flowData,
         Dictionary<string, InternalElementType> elementIndex)
     {
+        // Audit-v3 M7: treat empty endpoints as a MISMATCH — same semantics as
+        // AddConnection (which rejects them) and Validate (which only checks
+        // non-empty). Previously this branch returned true, which kept stale
+        // links alive even when the snapshot had explicitly cleared the refs.
         if (string.IsNullOrEmpty(flowData.SourceRef) || string.IsNullOrEmpty(flowData.TargetRef))
-            return true;   // not enough info to disprove — keep the link, let waypoint update run.
+            return false;
         if (!elementIndex.TryGetValue(flowData.SourceRef, out var expectedSource)) return false;
         if (!elementIndex.TryGetValue(flowData.TargetRef, out var expectedTarget)) return false;
 
@@ -554,7 +755,8 @@ public static class FpbJsonToCaex
         ElementData flowData,
         Dictionary<string, InternalElementType> elementIndex,
         Dictionary<string, VisualInfo> visualMap,
-        List<string> warnings)
+        List<string> warnings,
+        Dictionary<string, Dictionary<string, int>>? ifaceCounters = null)
     {
         if (!FlowToInterface.TryGetValue(flowData.Type, out var ifacePaths))
         {
@@ -573,24 +775,33 @@ public static class FpbJsonToCaex
             return null;
         }
 
-        // P2 #1 — cross-process defence. With FPB.JS-side ID collisions being possible
-        // across layers, the flat elementIndex could resolve to an IE in a different
-        // process subtree. Warn (but proceed) so the maintainer sees it in the log.
-        if (!IsDescendantOf(sourceIE, procAml) && !IsDescendantOf(targetIE, procAml))
+        // Audit-v3 M2: cross-process defence — warn when EITHER endpoint is
+        // outside procAml (was AND, which only caught both-outside). A flow
+        // whose source is in procAml but target is in a different process
+        // tree is also wrong; an ID collision can resolve to the wrong copy.
+        if (!IsDescendantOf(sourceIE, procAml) || !IsDescendantOf(targetIE, procAml))
         {
-            warnings.Add($"Flow '{flowData.Id}': neither endpoint lives under process " +
-                         $"'{procAml.Name}' — link may target the wrong layer.");
+            var sourceHost = FindHostProcessName(sourceIE);
+            var targetHost = FindHostProcessName(targetIE);
+            warnings.Add($"Flow '{flowData.Id}': not all endpoints live under process " +
+                         $"'{procAml.Name}' — source lives in '{sourceHost}', target lives in '{targetHost}' — link may target the wrong layer.");
         }
 
-        // Source-side ExternalInterface (carries PortCoordinate + Waypoint_n).
+        // Audit-v3 M4: ExternalInterface name uniqueness across the whole pass.
+        // Two parallel flows from the same element previously got two
+        // ExternalInterfaces named e.g. "FPD_FlowOut" — AML allows it but the
+        // round-trip reader can't tell them apart. Suffix with _2, _3, …
+        // matching BuildProcess's GetNextInterfaceName scheme.
+        ifaceCounters ??= new Dictionary<string, Dictionary<string, int>>();
         var outBaseName = ifacePaths.Out.Split('/')[1];
-        var sourceIface = sourceIE.ExternalInterface.Append(outBaseName);
+        var sourceIface = sourceIE.ExternalInterface.Append(
+            GetUniqueInterfaceName(ifaceCounters, flowData.SourceRef, outBaseName));
         sourceIface.ID = NewId();
         sourceIface.RefBaseClassPath = ifacePaths.Out;
 
-        // Target-side ExternalInterface (carries PortCoordinate only).
         var inBaseName = ifacePaths.In.Split('/')[1];
-        var targetIface = targetIE.ExternalInterface.Append(inBaseName);
+        var targetIface = targetIE.ExternalInterface.Append(
+            GetUniqueInterfaceName(ifaceCounters, flowData.TargetRef, inBaseName));
         targetIface.ID = NewId();
         targetIface.RefBaseClassPath = ifacePaths.In;
 
@@ -628,7 +839,7 @@ public static class FpbJsonToCaex
         // Match the linkName convention BuildProcess uses for green-field links.
         var sourceName = (sourceIE.Name ?? "Source").Replace(" ", "").Replace("\n", "");
         var targetName = (targetIE.Name ?? "Target").Replace(" ", "").Replace("\n", "");
-        var linkName = flowData.Type == "fpb:Usage"
+        var linkName = flowData.Type == FpbTypes.Usage
             ? $"{sourceName}_uses_{targetName}"
             : $"{sourceName}_to_{targetName}";
 
@@ -673,7 +884,8 @@ public static class FpbJsonToCaex
         Models.FpbProcess incomingProcess,
         Dictionary<string, InternalElementType> elementIndex,
         Dictionary<string, SystemUnitFamilyType> sucLookup,
-        List<string> warnings)
+        List<string> warnings,
+        MapperOptions? options = null)
     {
         if (string.IsNullOrEmpty(incomingProcess.IsDecomposedProcessOperator))
         {
@@ -681,10 +893,18 @@ public static class FpbJsonToCaex
                          "— only decomposed sub-processes can be created from FPB.JS edits.");
             return null;
         }
-        if (!elementIndex.TryGetValue(incomingProcess.IsDecomposedProcessOperator, out var parentPo))
+        // Diagnostic: dump the index keys + the looked-up key so we can see if
+        // the snapshot ID matches what BuildElementIndex actually produced.
+        var rawKey = incomingProcess.IsDecomposedProcessOperator;
+        var bareKey = StripBraces(rawKey);
+        if (!elementIndex.TryGetValue(rawKey, out var parentPo)
+            && !elementIndex.TryGetValue(bareKey, out parentPo))
         {
-            warnings.Add($"Cannot decompose: parent PO '{incomingProcess.IsDecomposedProcessOperator}' " +
-                         "not found in the AML document.");
+            var sampleKeys = string.Join(", ",
+                elementIndex.Keys.Take(8).Select(k => $"'{k}'"));
+            warnings.Add($"Cannot decompose: parent PO raw='{rawKey}' bare='{bareKey}' " +
+                         $"not found in elementIndex (size={elementIndex.Count}). " +
+                         $"Sample keys: [{sampleKeys}{(elementIndex.Count > 8 ? ", …" : "")}].");
             return null;
         }
 
@@ -697,29 +917,60 @@ public static class FpbJsonToCaex
     private static int RemoveOrphanedSubProcesses(
         InstanceHierarchyType fpdIH,
         HashSet<string> incomingDecomposedParentPoIds,
-        Dictionary<string, InternalElementType> elementIndex)
+        Dictionary<string, InternalElementType> elementIndex,
+        MapperOptions? options = null)
     {
-        var processSuc = ElementToSuc["fpb:Process"];
+        var processSuc = ElementToSuc[FpbTypes.Process];
         var subProcesses = fpdIH.InternalElement
             .Where(ie => ie.RefBaseSystemUnitPath == processSuc
-                         && !string.IsNullOrEmpty(ie.Attribute["refObj"]?.Value))
+                         && !string.IsNullOrEmpty(ie.GetRefObjOrDerived()))
             .ToList();
 
         var removed = 0;
         foreach (var sub in subProcesses)
         {
-            var parentRef = sub.Attribute["refObj"]?.Value ?? "";
+            var parentRef = sub.GetRefObjOrDerived() ?? "";
             var parentBare = StripBraces(parentRef);
             if (incomingDecomposedParentPoIds.Contains(parentBare)) continue;
 
-            // Clear the back-link on the parent PO (best-effort).
+            MapperTrace.Attempt(options, "RemoveSubProcess",
+                $"sub-process id='{sub.ID}' name='{sub.Name}' parentPO bare='{parentBare}' (parent no longer carries decomposedView)");
+
+            // Clear the back-link on the parent PO. Audit-fix #1: previously
+            // SetAttrValue ignored empty strings, so the parent PO kept a stale
+            // refProcess pointing at a detached IE — SyncDecompositionNamesPostPass
+            // then operated on the orphan.
             if (elementIndex.TryGetValue(parentBare, out var parentPo))
                 SetAttrValue(parentPo, "refProcess", "");
 
+            // Recurse: remove every descendant IE from the elementIndex too,
+            // otherwise SyncDecompositionNamesPostPass (and anything else
+            // reading elementIndex post-removal) sees detached elements.
+            PurgeSubtreeFromIndex(sub, elementIndex);
             sub.Remove();
             removed++;
+            MapperTrace.Result(options, "RemoveSubProcess", $"removed (plus purged subtree from elementIndex)");
         }
         return removed;
+    }
+
+    /// <summary>
+    /// Audit-fix #1: keep the elementIndex consistent with the AML tree after
+    /// any IE removal. Without this, later passes (SyncDecompositionNamesPostPass,
+    /// validators, debug dumps) operate on detached IEs whose CAEXParent is
+    /// null and whose mutations have no effect on the saved file.
+    /// </summary>
+    private static void PurgeSubtreeFromIndex(
+        InternalElementType subtreeRoot,
+        Dictionary<string, InternalElementType> elementIndex)
+    {
+        var rootId = StripBraces(subtreeRoot.ID);
+        if (!string.IsNullOrEmpty(rootId)) elementIndex.Remove(rootId);
+        WalkInternalElements(subtreeRoot.InternalElement, child =>
+        {
+            var id = StripBraces(child.ID);
+            if (!string.IsNullOrEmpty(id)) elementIndex.Remove(id);
+        });
     }
 
     private static InternalElementType AddProcessImpl(
@@ -754,32 +1005,154 @@ public static class FpbJsonToCaex
     }
 
     /// <summary>
-    /// Update FPD-managed properties on an existing InternalElement, leaving custom
-    /// user-added Attributes / ExternalInterfaces / MappingObjects in place.
-    /// Phase 2.C scope: name + Identification + ViewInformation.
-    /// Characteristics are deferred until SetCharacteristics has an idempotent form.
+    /// Update FPD-managed properties on an existing InternalElement, leaving
+    /// custom user-added Attributes / ExternalInterfaces / MappingObjects in
+    /// place. Covers Name, Identification, ViewInformation, Characteristics
+    /// (idempotent), and the Process⇄ProcessOperator name-sync for decomposed
+    /// pairs.
     /// </summary>
     private static void UpdateExistingElement(
         InternalElementType ie,
         ElementData data,
-        Dictionary<string, VisualInfo> visualMap)
+        Dictionary<string, VisualInfo> visualMap,
+        Dictionary<string, InternalElementType> elementIndex,
+        MapperOptions? options = null)
     {
-        // Name — only overwrite if the incoming side actually carries one (avoid
-        // wiping a meaningful AML name with FPB.JS's default "").
-        if (!string.IsNullOrEmpty(data.Name))
+        // Audit-add: log name diffs so a "why did the name change" question
+        // can be answered straight from the log without diffing the AML.
+        if (!string.IsNullOrEmpty(data.Name) && !string.Equals(ie.Name, data.Name, StringComparison.Ordinal))
+        {
+            MapperTrace.Info(options, $"UpdateExistingElement: ie='{ie.ID}' name '{ie.Name}' -> '{data.Name}'");
             ie.Name = data.Name;
+        }
 
-        // Identification: SetIdentification's helpers use SetSubAttr which only
-        // updates value-of-existing attributes — safe to call on an already-populated
-        // element.
-        SetIdentification(ie, data.Identification, data.Name);
+        SetIdentification(ie, data.Identification, data.Name, options);
 
-        // ViewInformation: SetViewInformation uses SetDoubleSubAttr which is idempotent
-        // (looks up existing sub-attributes and updates their value).
         if (visualMap.TryGetValue(data.Id, out var visual))
-            SetViewInformation(ie, visual);
+            SetViewInformation(ie, visual, options);
 
-        // TODO Phase 2.C+: idempotent SetCharacteristics (current impl appends, would dupe).
+        // Characteristics — SetCharacteristics is now idempotent (it strips
+        // existing Characteristic_N entries before re-writing), so changes the
+        // user made in the FPB.js viewer round-trip back through the AML.
+        if (data.Characteristics != null)
+            SetCharacteristics(ie, data.Characteristics, options);
+    }
+
+    /// <summary>
+    /// Post-pass that propagates ProcessOperator names to their decomposed
+    /// child Process IEs. Runs AFTER the main update loop so that
+    /// UpdateExistingElement's own data.Name write on the sub-process IE
+    /// cannot overwrite the sync (the loop order can hit child before parent
+    /// or vice versa). PO → child direction only; the reverse path is rare in
+    /// real workflows because renames typically happen on the primary
+    /// (PO-side) view.
+    /// </summary>
+    private static int SyncDecompositionNamesPostPass(Dictionary<string, InternalElementType> elementIndex, List<string>? warnings = null, MapperOptions? options = null)
+    {
+        var poSuc = ElementToSuc[FpbTypes.ProcessOperator];
+        var syncs = 0;
+
+        foreach (var ie in elementIndex.Values)
+        {
+            if (ie.RefBaseSystemUnitPath != poSuc) continue;
+            if (string.IsNullOrEmpty(ie.Name)) continue;
+
+            var refProcess = ie.Attribute["refProcess"]?.Value;
+            if (string.IsNullOrEmpty(refProcess)) continue;
+
+            var key = StripBraces(refProcess);
+            if (!elementIndex.TryGetValue(key, out var child))
+            {
+                MapperTrace.Info(options,
+                    $"SyncDecompositionNames: PO id='{ie.ID}' name='{ie.Name}' refProcess='{refProcess}' — child not in elementIndex (likely orphaned)");
+                continue;
+            }
+            // Audit-fix: don't mutate a detached IE — the actual mutation has
+            // no effect on the saved file and produces a misleading trace.
+            if (child.CAEXParent == null)
+            {
+                MapperTrace.Info(options,
+                    $"SyncDecompositionNames: child id='{child.ID}' is detached (CAEXParent=null) — skipping name sync");
+                continue;
+            }
+            if (!string.Equals(child.Name, ie.Name, StringComparison.Ordinal))
+            {
+                MapperTrace.Info(options,
+                    $"SyncDecompositionNames: PO id='{ie.ID}' name '{child.Name}' -> '{ie.Name}'");
+                child.Name = ie.Name;
+                syncs++;
+            }
+        }
+        return syncs;
+    }
+
+    /// <summary>
+    /// Audit-fix #2 + #3: re-derive <c>refObj</c> on every sub-process state
+    /// from the incoming snapshot. <see cref="UpdateExistingElement"/> and
+    /// <see cref="AddElement"/> are oblivious to whether their target IE is
+    /// a state inside a sub-process; they update Name/Identification/Visuals
+    /// only. Without this post-pass, decomposed-state refObj drifts silently
+    /// when the FPB.JS user changes which states are boundary states.
+    ///
+    /// Convention (mirrors green-field <see cref="BuildProcess"/> at lines
+    /// 1186-1198): a state ID that appears in BOTH the parent entry's
+    /// elementDataInformation AND the sub-process entry's elementDataInformation
+    /// is a boundary state and carries refObj = the normalised state ID.
+    /// Pure-child states (only in the sub-process) get refObj = "".
+    /// </summary>
+    private static int SyncBoundaryStateRefObjs(
+        List<ProcessEntry> entries,
+        Dictionary<string, InternalElementType> elementIndex,
+        MapperOptions? options = null)
+    {
+        // Audit-v3 M3: every entry (top-level OR sub-process) can be a parent
+        // for a deeper sub-process — grandchild decompositions need to find
+        // their parent which is itself a sub-process. Previously we filtered
+        // to top-level entries only and silently dropped multi-level state
+        // syncs.
+        var parentEntries = entries.ToList();
+
+        int updated = 0;
+        foreach (var entry in entries)
+        {
+            if (string.IsNullOrEmpty(entry.Process.IsDecomposedProcessOperator)) continue;
+            var parentPoBare = StripBraces(entry.Process.IsDecomposedProcessOperator);
+
+            // Find any entry whose elementData contains this parent PO.
+            var parentEntry = parentEntries.FirstOrDefault(p =>
+                p.ElementData.Any(d => StripBraces(d.Id) == parentPoBare));
+            if (parentEntry is null)
+            {
+                MapperTrace.Info(options,
+                    $"SyncBoundaryStateRefObjs: sub-process entry parent='{parentPoBare}' has no matching parent entry — leaving refObjs untouched");
+                continue;
+            }
+
+            var parentStateIds = new HashSet<string>(
+                parentEntry.ElementData
+                    .Where(d => StateTypes.Contains(d.Type))
+                    .Select(d => StripBraces(d.Id)),
+                StringComparer.OrdinalIgnoreCase);
+
+            foreach (var data in entry.ElementData)
+            {
+                if (!StateTypes.Contains(data.Type)) continue;
+                var stateBare = StripBraces(data.Id);
+                if (!elementIndex.TryGetValue(stateBare, out var stateIe)) continue;
+                if (stateIe.CAEXParent == null) continue;
+
+                var expected = parentStateIds.Contains(stateBare) ? NormalizeId(data.Id) : "";
+                var current  = stateIe.Attribute["refObj"]?.Value ?? "";
+                if (!string.Equals(current, expected, StringComparison.Ordinal))
+                {
+                    MapperTrace.Info(options,
+                        $"SyncBoundaryStateRefObjs: state id='{stateIe.ID}' name='{stateIe.Name}' refObj '{current}' -> '{expected}' ({(expected == "" ? "no longer boundary" : "boundary state")})");
+                    SetAttrValue(stateIe, "refObj", expected);
+                    updated++;
+                }
+            }
+        }
+        return updated;
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -792,7 +1165,7 @@ public static class FpbJsonToCaex
     /// </summary>
     private static InstanceHierarchyType? FindFpdInstanceHierarchy(CAEXFileType caex)
     {
-        var fpdProcessSuc = ElementToSuc["fpb:Process"];
+        var fpdProcessSuc = ElementToSuc[FpbTypes.Process];
         return caex.InstanceHierarchy.FirstOrDefault(ih =>
             ih.InternalElement.Any(ie => ie.RefBaseSystemUnitPath == fpdProcessSuc));
     }
@@ -802,14 +1175,30 @@ public static class FpbJsonToCaex
     /// B-format "{xxx-yyy}"; the index uses the raw form without braces so it matches
     /// FPB.JS-side IDs produced by <c>CaexToFpbJson.NormalizeId</c>).
     /// </summary>
-    private static Dictionary<string, InternalElementType> BuildElementIndex(InstanceHierarchyType fpdIH)
+    private static Dictionary<string, InternalElementType> BuildElementIndex(
+        InstanceHierarchyType fpdIH,
+        MapperOptions? options = null,
+        List<string>? warnings = null)
     {
         var index = new Dictionary<string, InternalElementType>(StringComparer.OrdinalIgnoreCase);
         WalkInternalElements(fpdIH.InternalElement, ie =>
         {
             var bare = StripBraces(ie.ID);
-            if (!string.IsNullOrEmpty(bare))
-                index[bare] = ie;
+            if (string.IsNullOrEmpty(bare)) return;
+            // Audit-v2 fix #1: duplicate IDs in sibling sub-process branches
+            // would silently overwrite an earlier IE in the flat index, then
+            // SyncBoundaryStateRefObjs / AddConnection / etc. would mutate the
+            // wrong element. Surface the collision so we can see it.
+            if (index.TryGetValue(bare, out var existing))
+            {
+                var msg = $"BuildElementIndex: duplicate ID '{bare}' detected — existing parent='{existing.CAEXParent?.ToString() ?? "?"}' name='{existing.Name}', " +
+                          $"new parent='{ie.CAEXParent?.ToString() ?? "?"}' name='{ie.Name}'. " +
+                          $"Keeping the first; the second one cannot be addressed via elementIndex lookups.";
+                warnings?.Add(msg);
+                MapperTrace.Info(options, msg);
+                return; // do NOT overwrite — keep the first occurrence stable.
+            }
+            index[bare] = ie;
         });
         return index;
     }
@@ -836,9 +1225,10 @@ public static class FpbJsonToCaex
     /// Core builder: validates, ensures libraries, and appends a fresh InstanceHierarchy
     /// containing the FPD processes. Does not touch FileName or SourceDocumentInformation.
     /// </summary>
-    private static List<string> AppendInto(CAEXDocument doc, FpbProject project, List<ProcessEntry> entries)
+    private static List<string> AppendInto(CAEXDocument doc, FpbProject project, List<ProcessEntry> entries, MapperOptions? options = null)
     {
         var warnings = new List<string>();
+        MapperTrace.Info(options, $"AppendInto ENTRY: project='{project.Name}' entries={entries.Count}");
         Validate(project, entries, warnings);
         var processMap = entries.ToDictionary(e => e.Process.Id, e => e);
         var entryProcessId = project.EntryPoint;
@@ -854,7 +1244,7 @@ public static class FpbJsonToCaex
             if (!processMap.TryGetValue(pid, out var entry)) continue;
             foreach (var obj in entry.ElementData)
             {
-                if (obj.Type == "fpb:ProcessOperator" && !string.IsNullOrEmpty(obj.DecomposedView))
+                if (obj.Type == FpbTypes.ProcessOperator && !string.IsNullOrEmpty(obj.DecomposedView))
                     poToChildProcess[obj.Id] = obj.DecomposedView;
             }
         }
@@ -881,7 +1271,7 @@ public static class FpbJsonToCaex
 
         foreach (var pid in allProcessIds)
         {
-            BuildProcess(ih, pid, processMap, processAmlIds, poToChildProcess, usedAmlIds, sucLookup, warnings);
+            BuildProcess(ih, pid, processMap, processAmlIds, poToChildProcess, usedAmlIds, sucLookup, warnings, options);
         }
 
         return warnings;
@@ -904,7 +1294,7 @@ public static class FpbJsonToCaex
 
         foreach (var obj in entry.ElementData)
         {
-            if (obj.Type == "fpb:ProcessOperator" && !string.IsNullOrEmpty(obj.DecomposedView))
+            if (obj.Type == FpbTypes.ProcessOperator && !string.IsNullOrEmpty(obj.DecomposedView))
             {
                 if (processMap.ContainsKey(obj.DecomposedView))
                     result.AddRange(CollectProcessIds(obj.DecomposedView, processMap, visited, depth + 1));
@@ -925,7 +1315,8 @@ public static class FpbJsonToCaex
         Dictionary<string, string> poToChildProcess,
         HashSet<string> usedAmlIds,
         Dictionary<string, SystemUnitFamilyType> sucLookup,
-        List<string> warnings)
+        List<string> warnings,
+        MapperOptions? options = null)
     {
         if (!processMap.TryGetValue(processId, out var entry)) return;
 
@@ -934,7 +1325,7 @@ public static class FpbJsonToCaex
         var dataMap = entry.ElementData.ToDictionary(d => d.Id, d => d);
 
         // Determine process name
-        var slData = entry.ElementData.FirstOrDefault(e => e.Type == "fpb:SystemLimit");
+        var slData = entry.ElementData.FirstOrDefault(e => e.Type == FpbTypes.SystemLimit);
         var parentPOId = process.IsDecomposedProcessOperator;
         string? processName = null;
 
@@ -964,9 +1355,19 @@ public static class FpbJsonToCaex
             slIE.Name = "SystemLimit_" + processName.Replace(" ", "");
             slIE.ID = NormalizeId(slData.Id);
             procIE.Insert(slIE);
-            SetIdentification(slIE, slData.Identification, processName);
+            SetIdentification(slIE, slData.Identification, processName, options);
             if (visualMap.TryGetValue(slData.Id, out var slVisual))
-                SetViewInformation(slIE, slVisual);
+            {
+                SetViewInformation(slIE, slVisual, options);
+            }
+            else
+            {
+                // Audit-v3 M6: same family as the AddElement defaults — a green-field
+                // import whose snapshot lacks SystemLimit visuals would otherwise
+                // render as a 0×0 invisible box in FPB.JS.
+                SetViewInformation(slIE, new VisualInfo { X = 100, Y = 100, Width = 600, Height = 400 }, options);
+                MapperTrace.Info(options, $"BuildProcess: SystemLimit '{slIE.ID}' had no visual data — applied default ViewInformation (100,100,600,400)");
+            }
         }
 
         // Collect ExternalInterface references for InternalLinks
@@ -1000,13 +1401,13 @@ public static class FpbJsonToCaex
         {
             parentEntry = processMap.Values.FirstOrDefault(pe =>
                 pe.ElementData.Any(e =>
-                    e.Type == "fpb:ProcessOperator" && e.DecomposedView == processId));
+                    e.Type == FpbTypes.ProcessOperator && e.DecomposedView == processId));
         }
 
         // Build object InternalElements
         foreach (var obj in objects)
         {
-            if (obj.Type == "fpb:SystemLimit") continue;
+            if (obj.Type == FpbTypes.SystemLimit) continue;
             if (!ElementToSuc.TryGetValue(obj.Type, out var sucPath)) continue;
 
             var sucName = sucPath.Split('/')[1]; // e.g. "FPD_Product"
@@ -1029,11 +1430,11 @@ public static class FpbJsonToCaex
             procIE.Insert(ie);
 
             // Set attribute values on the auto-created attributes
-            SetIdentification(ie, obj.Identification, elemName);
-            SetCharacteristics(ie, obj.Characteristics);
+            SetIdentification(ie, obj.Identification, elemName, options);
+            SetCharacteristics(ie, obj.Characteristics, options);
 
             // refProcess (on ProcessOperator only)
-            if (obj.Type == "fpb:ProcessOperator")
+            if (obj.Type == FpbTypes.ProcessOperator)
             {
                 if (!string.IsNullOrEmpty(obj.DecomposedView) && poToChildProcess.ContainsKey(obj.Id))
                 {
@@ -1061,7 +1462,7 @@ public static class FpbJsonToCaex
 
             // ViewInformation
             if (visualMap.TryGetValue(obj.Id, out var visual))
-                SetViewInformation(ie, visual);
+                SetViewInformation(ie, visual, options);
 
             // ExternalInterfaces for outgoing flows
             if (flowsBySource.TryGetValue(obj.Id, out var outFlows))
@@ -1153,7 +1554,7 @@ public static class FpbJsonToCaex
             var sourceName = sourceData?.Name.Replace(" ", "").Replace("\n", "") ?? "Source";
             var targetName = targetData?.Name.Replace(" ", "").Replace("\n", "") ?? "Target";
 
-            var linkName = flow?.Type == "fpb:Usage"
+            var linkName = flow?.Type == FpbTypes.Usage
                 ? $"{sourceName}_uses_{targetName}"
                 : $"{sourceName}_to_{targetName}";
 
@@ -1192,46 +1593,86 @@ public static class FpbJsonToCaex
     // Attribute setters (work on auto-created attributes from CreateClassInstance)
     // ========================================================================
 
+    /// <summary>
+    /// Set or CLEAR an attribute value on an IE. Audit-fix: the previous
+    /// implementation silently ignored empty values, which meant
+    /// <c>SetAttrValue(po, "refProcess", "")</c> didn't actually clear the
+    /// reference after a sub-process was removed — the parent PO kept pointing
+    /// at a detached IE and SyncDecompositionNamesPostPass crashed/no-op'd on
+    /// the dangling pointer. Now empty values write an empty string (which is
+    /// what every consumer reads as "cleared").
+    /// </summary>
     private static void SetAttrValue(InternalElementType ie, string name, string value)
     {
         var attr = ie.Attribute[name];
         if (attr != null)
         {
-            if (!string.IsNullOrEmpty(value))
-                attr.Value = value;
+            attr.Value = value ?? string.Empty;
         }
         else
         {
-            // Fallback: create if missing (shouldn't happen with proper SUC)
+            // Fallback: create if missing (shouldn't happen with proper SUC).
+            // Audit-v2 fix #8: mirror the main-path semantics — empty becomes
+            // "" not null, so consumers see a consistent state regardless of
+            // whether the attribute was pre-existing or freshly created.
             var newAttr = ie.Attribute.Append(name);
             newAttr.AttributeDataType = "xs:string";
-            if (!string.IsNullOrEmpty(value))
-                newAttr.Value = value;
+            newAttr.Value = value ?? string.Empty;
         }
     }
 
-    private static void SetIdentification(InternalElementType ie, Identification? ident, string fallbackName)
+    private static void SetIdentification(InternalElementType ie, Identification? ident, string fallbackName, MapperOptions? options = null)
     {
-        var attr = ie.Attribute["Identification"];
-        if (attr == null) return;
+        var attr = ie.Attribute[IdentificationSchema.AttributeName];
+        if (attr == null)
+        {
+            MapperTrace.Info(options, $"SetIdentification: ie='{ie.ID}' has no Identification container (SUC malformed?) — skipped");
+            return;
+        }
 
-        SetSubAttr(attr, "uniqueIdent", ident?.UniqueIdent);
-        SetSubAttr(attr, "longName", ident?.LongName);
-        SetSubAttr(attr, "shortName", ident?.ShortName ?? fallbackName);
-        SetSubAttr(attr, "versionNumber", ident?.VersionNumber);
-        SetSubAttr(attr, "revisionNumber", ident?.RevisionNumber);
+        SetSubAttr(attr, IdentificationSchema.UniqueIdent,    ident?.UniqueIdent);
+        SetSubAttr(attr, IdentificationSchema.LongName,       ident?.LongName);
+        SetSubAttr(attr, IdentificationSchema.ShortName,      ident?.ShortName ?? fallbackName);
+        SetSubAttr(attr, IdentificationSchema.VersionNumber,  ident?.VersionNumber);
+        SetSubAttr(attr, IdentificationSchema.RevisionNumber, ident?.RevisionNumber);
+        MapperTrace.Info(options, $"SetIdentification: ie='{ie.ID}' shortName='{ident?.ShortName ?? fallbackName}'");
     }
 
-    private static void SetCharacteristics(InternalElementType ie, List<Characteristic> characteristics)
+    /// <summary>
+    /// Idempotent replacement of the Characteristics container on the IE.
+    /// Removes any existing Characteristic_N sub-attributes first, then writes
+    /// the incoming list. Safe to call on an already-populated IE — that's the
+    /// path UpdateExistingElement uses for property edits round-tripping back
+    /// from the viewer.
+    /// </summary>
+    private static void SetCharacteristics(InternalElementType ie, List<Characteristic> characteristics, MapperOptions? options = null)
     {
-        if (characteristics.Count == 0) return;
-
         var container = ie.Attribute["Characteristics"];
+        var removedExisting = 0;
+
+        // Wipe existing Characteristic_N entries before re-adding so the same
+        // IE doesn't end up with two parallel copies of the user's edits.
+        if (container != null)
+        {
+            var existing = container.Attribute
+                .Where(a => a.Name != null && a.Name.StartsWith("Characteristic_", StringComparison.Ordinal))
+                .ToList();
+            foreach (var old in existing) old.Remove();
+            removedExisting = existing.Count;
+        }
+
+        if (characteristics.Count == 0)
+        {
+            MapperTrace.Info(options, $"SetCharacteristics: ie='{ie.ID}' wiped {removedExisting} existing, no new ones (user cleared)");
+            return;
+        }
+
         if (container == null)
         {
             container = ie.Attribute.Append("Characteristics");
             container.AttributeDataType = "xs:string";
         }
+        MapperTrace.Info(options, $"SetCharacteristics: ie='{ie.ID}' removed={removedExisting}, adding={characteristics.Count}");
 
         for (int i = 0; i < characteristics.Count; i++)
         {
@@ -1244,15 +1685,15 @@ public static class FpbJsonToCaex
             var identAttr = cAttr.Attribute.Append("Category");
             identAttr.AttributeDataType = "xs:string";
             identAttr.RefAttributeType = AttrRefs.Identification;
-            foreach (var f in new[] { "uniqueIdent", "longName", "shortName", "versionNumber", "revisionNumber" })
+            foreach (var f in IdentificationSchema.Fields)
             {
                 var val = f switch
                 {
-                    "uniqueIdent" => cat?.UniqueIdent ?? "",
-                    "longName" => cat?.LongName ?? "",
-                    "shortName" => cat?.ShortName ?? "",
-                    "versionNumber" => cat?.VersionNumber ?? "",
-                    "revisionNumber" => cat?.RevisionNumber ?? "",
+                    IdentificationSchema.UniqueIdent    => cat?.UniqueIdent ?? "",
+                    IdentificationSchema.LongName       => cat?.LongName ?? "",
+                    IdentificationSchema.ShortName      => cat?.ShortName ?? "",
+                    IdentificationSchema.VersionNumber  => cat?.VersionNumber ?? "",
+                    IdentificationSchema.RevisionNumber => cat?.RevisionNumber ?? "",
                     _ => ""
                 };
                 var sub = identAttr.Attribute.Append(f);
@@ -1278,10 +1719,14 @@ public static class FpbJsonToCaex
         }
     }
 
-    private static void SetViewInformation(InternalElementType ie, VisualInfo visual)
+    private static void SetViewInformation(InternalElementType ie, VisualInfo visual, MapperOptions? options = null)
     {
         var attr = ie.Attribute["ViewInformation"];
-        if (attr == null) return;
+        if (attr == null)
+        {
+            MapperTrace.Info(options, $"SetViewInformation: ie='{ie.ID}' has no ViewInformation container — skipped");
+            return;
+        }
 
         var pos = attr.Attribute["position"];
         if (pos != null)
@@ -1291,13 +1736,20 @@ public static class FpbJsonToCaex
         }
         SetDoubleSubAttr(attr, "width", visual.Width);
         SetDoubleSubAttr(attr, "height", visual.Height);
+        MapperTrace.Info(options, $"SetViewInformation: ie='{ie.ID}' x={visual.X} y={visual.Y} w={visual.Width} h={visual.Height}");
     }
 
     private static void SetSubAttr(AttributeType parent, string name, string? value)
     {
+        // Audit-v3 M5: empty/null writes used to be silently skipped, which
+        // meant the user clearing Identification fields (longName, shortName,
+        // versionNumber, revisionNumber) didn't actually clear anything — the
+        // old value stuck around in AML. Same family as the SetAttrValue
+        // empty-clear fix from audit-v1. Now we write "" explicitly so the
+        // reader sees the user-intended cleared state.
         var attr = parent.Attribute[name];
-        if (attr != null && !string.IsNullOrEmpty(value))
-            attr.Value = value;
+        if (attr != null)
+            attr.Value = value ?? string.Empty;
     }
 
     private static void SetDoubleSubAttr(AttributeType parent, string name, double value)
@@ -1378,13 +1830,25 @@ public static class FpbJsonToCaex
         if (!entries.Any(e => e.Process.Id == project.EntryPoint))
             throw new InvalidOperationException($"Entry point '{project.EntryPoint}' not found in process entries.");
 
+        // Audit-v2 fix #9: NormalizeId in FpbJsonToCaex (wrap) and CaexToFpbJson
+        // (strip) are inverse for GUIDs but not for custom strings. Warn early
+        // if we see non-GUID IDs so a round-trip divergence has a paper trail.
         foreach (var entry in entries)
         {
-            var hasSL = entry.ElementData.Any(e => e.Type == "fpb:SystemLimit");
+            if (!System.Guid.TryParse(entry.Process.Id, out _))
+                warnings.Add($"Non-GUID process ID '{entry.Process.Id}' — round-trip ID normalization may not be idempotent.");
+            foreach (var d in entry.ElementData)
+                if (!System.Guid.TryParse(d.Id, out _))
+                    warnings.Add($"Non-GUID element ID '{d.Id}' (type='{d.Type}') — round-trip ID normalization may not be idempotent.");
+        }
+
+        foreach (var entry in entries)
+        {
+            var hasSL = entry.ElementData.Any(e => e.Type == FpbTypes.SystemLimit);
             if (!hasSL)
                 warnings.Add($"Process '{entry.Process.Id}' has no SystemLimit.");
 
-            var hasPO = entry.ElementData.Any(e => e.Type == "fpb:ProcessOperator");
+            var hasPO = entry.ElementData.Any(e => e.Type == FpbTypes.ProcessOperator);
             if (!hasPO)
                 warnings.Add($"Process '{entry.Process.Id}' has no ProcessOperator.");
 

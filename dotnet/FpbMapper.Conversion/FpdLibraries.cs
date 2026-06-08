@@ -42,11 +42,11 @@ public static class FpdLibraries
 
         var icl = caex.InterfaceClassLib.Append(LibNames.InterfaceClassLib);
         icl.Description = "Flow and usage port interfaces for the Formalized Process Description (FPD).";
-        icl.Version = "1.0.0";
+        icl.Version = LibNames.Version;
 
         var port = icl.InterfaceClass.Append("FPD_Port");
         port.Description = "Abstract base port for all FPD connections.";
-        port.Version = "1.0.0";
+        port.Version = LibNames.Version;
         port.RefBaseClassPath = AmlBase.Port;
         AddPointAttr(port, "PortCoordinate");
 
@@ -59,7 +59,7 @@ public static class FpdLibraries
         })
         {
             var ic = icl.InterfaceClass.Append(name);
-            ic.Version = "1.0.0";
+            ic.Version = LibNames.Version;
             ic.RefBaseClassPath = $"{LibNames.InterfaceClassLib}/FPD_Port";
         }
     }
@@ -72,26 +72,26 @@ public static class FpdLibraries
 
         var rcl = caex.RoleClassLib.Append(LibNames.RoleClassLib);
         rcl.Description = "Semantic model of the FPD per VDI/VDE 3682. Flat layout with explicit inheritance via RefBaseClassPath.";
-        rcl.Version = "1.0.0";
+        rcl.Version = LibNames.Version;
 
         // FPD_Process (inherits AML Structure)
         var proc = rcl.RoleClass.Append("FPD_Process");
         proc.Description = "Process (Part 2, Fig. 2). Aggregates states (2..*), system limit (1), and process operators (1..*).";
-        proc.Version = "1.0.0";
+        proc.Version = LibNames.Version;
         proc.RefBaseClassPath = AmlBase.Structure;
         AddRefObjAttr(proc, "IDREF to the parent process operator whose decomposition this process represents.");
 
         // FPD_SystemLimit
         var sl = rcl.RoleClass.Append("FPD_SystemLimit");
         sl.Description = "System limit (Part 1, p. 9). Peer aggregate of the process, not a container.";
-        sl.Version = "1.0.0";
+        sl.Version = LibNames.Version;
         AddIdentificationAttr(sl);
         AddBoundsAttr(sl, "ViewInformation");
 
         // FPD_Object (abstract base, inherits AML BaseRole)
         var obj = rcl.RoleClass.Append("FPD_Object");
         obj.Description = "Abstract base for all FPB objects (Part 1, p. 4: product, energy, information, process operator, technical resource).";
-        obj.Version = "1.0.0";
+        obj.Version = LibNames.Version;
         obj.RefBaseClassPath = AmlBase.BaseRole;
         AddIdentificationAttr(obj);
         var charAttr = AddAttr(obj, "Characteristics", "xs:string");
@@ -101,7 +101,7 @@ public static class FpdLibraries
         // FPD_State (inherits FPD_Object)
         var state = rcl.RoleClass.Append("FPD_State");
         state.Description = "Abstract state (Part 2, Fig. 2). Inherits Identification and Characteristics from FPD_Object.";
-        state.Version = "1.0.0";
+        state.Version = LibNames.Version;
         state.RefBaseClassPath = $"{LibNames.RoleClassLib}/FPD_Object";
         AddRefObjAttr(state, "IDREF to the original state instance that this boundary state represents. Always points to the top-level original, regardless of decomposition depth.");
 
@@ -109,21 +109,21 @@ public static class FpdLibraries
         foreach (var name in new[] { "FPD_Product", "FPD_Energy", "FPD_Information" })
         {
             var s = rcl.RoleClass.Append(name);
-            s.Version = "1.0.0";
+            s.Version = LibNames.Version;
             s.RefBaseClassPath = $"{LibNames.RoleClassLib}/FPD_State";
         }
 
         // FPD_ProcessOperator (inherits FPD_Object)
         var po = rcl.RoleClass.Append("FPD_ProcessOperator");
         po.Description = "Process operator (Part 2, Fig. 2). Inherits Identification and Characteristics from FPD_Object.";
-        po.Version = "1.0.0";
+        po.Version = LibNames.Version;
         po.RefBaseClassPath = $"{LibNames.RoleClassLib}/FPD_Object";
         AddRefProcessAttr(po, "IDREF to the child process that decomposes this operator. Empty if the operator is not further decomposed.");
 
         // FPD_TechnicalResource (inherits FPD_Object)
         var tr = rcl.RoleClass.Append("FPD_TechnicalResource");
         tr.Description = "Technical resource (Part 1, p. 9). Located outside the system limit, associated via usage.";
-        tr.Version = "1.0.0";
+        tr.Version = LibNames.Version;
         tr.RefBaseClassPath = $"{LibNames.RoleClassLib}/FPD_Object";
     }
 
@@ -134,17 +134,17 @@ public static class FpdLibraries
         if (caex.AttributeTypeLib[LibNames.AttributeTypeLib] != null) return;
 
         var atl = caex.AttributeTypeLib.Append(LibNames.AttributeTypeLib);
-        atl.Version = "1.0.0";
+        atl.Version = LibNames.Version;
 
         var ident = atl.AttributeType.Append("FPD_Identification");
         ident.AttributeDataType = "xs:string";
-        ident.Version = "1.0.0";
+        ident.Version = LibNames.Version;
         foreach (var f in IdentFields)
             AddAttr(ident, f, "xs:string");
 
         var charac = atl.AttributeType.Append("FPD_Characteristic");
         charac.AttributeDataType = "xs:string";
-        charac.Version = "1.0.0";
+        charac.Version = LibNames.Version;
 
         var cIdent = AddAttr(charac, "Category", "xs:string");
         cIdent.RefAttributeType = AttrRefs.Identification;
@@ -162,7 +162,7 @@ public static class FpdLibraries
         var refObjType = atl.AttributeType.Append("refObj");
         refObjType.AttributeDataType = "xs:string";
         refObjType.Description = "Generic IDREF attribute. Semantics depend on the carrying element (see RoleClassLib descriptions).";
-        refObjType.Version = "1.0.0";
+        refObjType.Version = LibNames.Version;
     }
 
     // -- 4. FPD_DI_AttributeTypeLib ------------------------------------------
@@ -173,12 +173,12 @@ public static class FpdLibraries
 
         var diatl = caex.AttributeTypeLib.Append(LibNames.DIAttributeTypeLib);
         diatl.Description = "Diagram Interchange attributes, aligned with OMG DD/DI terminology (DC::Bounds, DC::Point, DI::Waypoint).";
-        diatl.Version = "1.0.0";
+        diatl.Version = LibNames.Version;
 
         var bounds = diatl.AttributeType.Append("FPD_Bounds");
         bounds.AttributeDataType = "xs:string";
         bounds.Description = "A rectangular area defined by a top-left (x, y) location and a size (width, height) along the x-y axes (cf. DC::Bounds).";
-        bounds.Version = "1.0.0";
+        bounds.Version = LibNames.Version;
         AddPointAttr(bounds, "position");
         AddAttr(bounds, "width", "xs:double");
         AddAttr(bounds, "height", "xs:double");
@@ -186,13 +186,13 @@ public static class FpdLibraries
         var wp = diatl.AttributeType.Append("FPD_Waypoint");
         wp.AttributeDataType = "xs:string";
         wp.Description = "A routing point along a connection path (cf. DI::Waypoint).";
-        wp.Version = "1.0.0";
+        wp.Version = LibNames.Version;
         AddPointAttr(wp, "position");
 
         var pt = diatl.AttributeType.Append("FPD_Point");
         pt.AttributeDataType = "xs:string";
         pt.Description = "A two-dimensional point in a coordinate system (cf. DC::Point).";
-        pt.Version = "1.0.0";
+        pt.Version = LibNames.Version;
         AddAttr(pt, "x", "xs:double");
         AddAttr(pt, "y", "xs:double");
     }
@@ -205,25 +205,25 @@ public static class FpdLibraries
 
         var sucl = caex.SystemUnitClassLib.Append(LibNames.SystemUnitClassLib);
         sucl.Description = "Instantiation templates with mirrored attributes and SUC inheritance.";
-        sucl.Version = "1.0.0";
+        sucl.Version = LibNames.Version;
 
         // FPD_Process (standalone)
         var procSuc = sucl.SystemUnitClass.Append("FPD_Process");
-        procSuc.Version = "1.0.0";
+        procSuc.Version = LibNames.Version;
         AddRefObjAttr(procSuc, null);
         procSuc.SupportedRoleClass.Append().RefRoleClassPath = $"{LibNames.RoleClassLib}/FPD_Process";
         procSuc.SupportedRoleClass.Append().RefRoleClassPath = AmlBase.Structure;
 
         // FPD_SystemLimit (standalone)
         var slSuc = sucl.SystemUnitClass.Append("FPD_SystemLimit");
-        slSuc.Version = "1.0.0";
+        slSuc.Version = LibNames.Version;
         AddIdentificationAttr(slSuc);
         AddBoundsAttr(slSuc, "ViewInformation");
         slSuc.SupportedRoleClass.Append().RefRoleClassPath = $"{LibNames.RoleClassLib}/FPD_SystemLimit";
 
         // FPD_Object (abstract base SUC)
         var objSuc = sucl.SystemUnitClass.Append("FPD_Object");
-        objSuc.Version = "1.0.0";
+        objSuc.Version = LibNames.Version;
         AddIdentificationAttr(objSuc);
         AddAttr(objSuc, "Characteristics", "xs:string");
         AddBoundsAttr(objSuc, "ViewInformation");
@@ -231,7 +231,7 @@ public static class FpdLibraries
 
         // FPD_State (inherits FPD_Object, adds refObj)
         var stateSuc = sucl.SystemUnitClass.Append("FPD_State");
-        stateSuc.Version = "1.0.0";
+        stateSuc.Version = LibNames.Version;
         stateSuc.RefBaseClassPath = $"{LibNames.SystemUnitClassLib}/FPD_Object";
         AddRefObjAttr(stateSuc, null);
         stateSuc.SupportedRoleClass.Append().RefRoleClassPath = $"{LibNames.RoleClassLib}/FPD_State";
@@ -241,7 +241,7 @@ public static class FpdLibraries
         foreach (var name in new[] { "FPD_Product", "FPD_Energy", "FPD_Information" })
         {
             var suc = sucl.SystemUnitClass.Append(name);
-            suc.Version = "1.0.0";
+            suc.Version = LibNames.Version;
             suc.RefBaseClassPath = $"{LibNames.SystemUnitClassLib}/FPD_State";
             suc.SupportedRoleClass.Append().RefRoleClassPath = $"{LibNames.RoleClassLib}/{name}";
             if (name == "FPD_Product")
@@ -250,7 +250,7 @@ public static class FpdLibraries
 
         // FPD_ProcessOperator (inherits FPD_Object, adds refProcess)
         var poSuc = sucl.SystemUnitClass.Append("FPD_ProcessOperator");
-        poSuc.Version = "1.0.0";
+        poSuc.Version = LibNames.Version;
         poSuc.RefBaseClassPath = $"{LibNames.SystemUnitClassLib}/FPD_Object";
         AddRefProcessAttr(poSuc, null);
         poSuc.SupportedRoleClass.Append().RefRoleClassPath = $"{LibNames.RoleClassLib}/FPD_ProcessOperator";
@@ -258,7 +258,7 @@ public static class FpdLibraries
 
         // FPD_TechnicalResource (inherits FPD_Object)
         var trSuc = sucl.SystemUnitClass.Append("FPD_TechnicalResource");
-        trSuc.Version = "1.0.0";
+        trSuc.Version = LibNames.Version;
         trSuc.RefBaseClassPath = $"{LibNames.SystemUnitClassLib}/FPD_Object";
         trSuc.SupportedRoleClass.Append().RefRoleClassPath = $"{LibNames.RoleClassLib}/FPD_TechnicalResource";
         trSuc.SupportedRoleClass.Append().RefRoleClassPath = AmlBase.Resource;
@@ -266,8 +266,9 @@ public static class FpdLibraries
 
     // -- Helpers --------------------------------------------------------------
 
-    private static readonly string[] IdentFields =
-        { "uniqueIdent", "longName", "shortName", "versionNumber", "revisionNumber" };
+    // Identification field list lives in IdentificationSchema as the single
+    // source of truth — see IdentificationSchema.cs.
+    private static IReadOnlyList<string> IdentFields => IdentificationSchema.Fields;
 
     private static AttributeType AddAttr(IObjectWithAttributes parent, string name, string dataType)
     {
@@ -297,7 +298,7 @@ public static class FpdLibraries
 
     private static void AddIdentificationAttr(IObjectWithAttributes parent)
     {
-        var attr = parent.Attribute.Append("Identification");
+        var attr = parent.Attribute.Append(IdentificationSchema.AttributeName);
         attr.AttributeDataType = "xs:string";
         attr.RefAttributeType = AttrRefs.Identification;
         foreach (var f in IdentFields)

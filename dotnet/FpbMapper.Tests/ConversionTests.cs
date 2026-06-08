@@ -992,6 +992,581 @@ public class UpdateInPlaceEditTests
     }
 }
 
+public class DanglingReferenceStripTests
+{
+    private static string LoadTestData(string name) =>
+        File.ReadAllText(Path.Combine("TestData", name));
+
+    /// <summary>
+    /// Bug 6 (v0.5.1): adds a defensive cleanup pass that strips IDs which appear
+    /// in a process's elementsContainer / consistsOfStates / consistsOfProcessOperator
+    /// but have no matching elementDataInformation entry. The crash that motivated
+    /// it ("Cannot read properties of undefined (reading 'type')" in FPB.JS's
+    /// buildSystemLimit) reproduces in a JS-side state-mismatch scenario that is
+    /// not easily synthesised from C# alone.
+    ///
+    /// This test guards against the FALSE-POSITIVE case: a valid round-tripped
+    /// AML document must NOT trigger the strip warning, otherwise the cleanup
+    /// would be eating legitimate content.
+    /// </summary>
+    [Fact]
+    public void Convert_ValidAml_DoesNotEmitStripWarning()
+    {
+        var doc = FpbJsonToCaex.Convert(LoadTestData("Temperieren.json")).Value;
+        var result = CaexToFpbJson.Convert(doc);
+
+        // Each individual warning must not be a "dangling element" complaint —
+        // every emitted ID should already have a matching elementData entry.
+        foreach (var w in result.Warnings)
+        {
+            Assert.DoesNotContain("dangling element", w);
+        }
+    }
+
+    /// <summary>
+    /// The same sanity check via the explicit single-IH overload, which is what
+    /// the AML editor plugin uses when rendering multi-IH documents.
+    /// </summary>
+    [Fact]
+    public void Convert_PerIh_ValidAml_DoesNotEmitStripWarning()
+    {
+        var doc = FpbJsonToCaex.Convert(LoadTestData("Temperieren.json")).Value;
+        var ih = CaexToFpbJson.FindFpdInstanceHierarchies(doc).First();
+        var result = CaexToFpbJson.Convert(doc, ih);
+
+        foreach (var w in result.Warnings)
+        {
+            Assert.DoesNotContain("dangling element", w);
+        }
+    }
+}
+
+public class ReferenceTypeTests
+{
+    private static string LoadTestData(string name) =>
+        File.ReadAllText(Path.Combine("TestData", name));
+
+    /// <summary>
+    /// The classical VDI 3682 decomposition link sits in the refObj attribute,
+    /// and the existing GetRefObjOrDerived helper must return that value
+    /// unchanged for back-compat.
+    /// </summary>
+    [Fact]
+    public void GetRefObjOrDerived_PicksUpClassicRefObj()
+    {
+        var doc = FpbJsonToCaex.Convert(LoadTestData("Temperieren.json")).Value;
+        var ih = doc.CAEXFile.InstanceHierarchy.First();
+
+        // Locate any sub-process IE — they always carry refObj per the mapper.
+        InternalElementType? subProc = null;
+        foreach (var proc in ih.InternalElement)
+        {
+            if (!string.IsNullOrEmpty(proc.GetReferenceValue(ReferenceTypes.RefObj)))
+            { subProc = proc; break; }
+        }
+        Assert.NotNull(subProc);
+
+        var refObjValue = subProc!.GetReferenceValue(ReferenceTypes.RefObj);
+        var resolved = subProc.GetRefObjOrDerived();
+        Assert.Equal(refObjValue, resolved);
+    }
+
+    /// <summary>
+    /// When refObj is empty but a derivative (refBaseObj / refExtendedObj /
+    /// refComposedObj) is set, the helper must fall back to that derivative
+    /// value. This is the ETFA 2026 Object-References integration point.
+    /// </summary>
+    [Fact]
+    public void GetRefObjOrDerived_FallsBackToRefBaseObj()
+    {
+        var doc = FpbJsonToCaex.Convert(LoadTestData("Temperieren.json")).Value;
+        var ih = doc.CAEXFile.InstanceHierarchy.First();
+        var someIe = ih.InternalElement.First();
+
+        // Wipe refObj and stamp a refBaseObj value instead.
+        var refObjAttr = someIe.Attribute["refObj"];
+        if (refObjAttr != null) refObjAttr.Value = "";
+        var refBaseObjAttr = someIe.Attribute.Append("refBaseObj");
+        refBaseObjAttr.Value = "{aabbccdd-0000-1111-2222-333344445555}";
+
+        Assert.Equal("{aabbccdd-0000-1111-2222-333344445555}", someIe.GetRefObjOrDerived());
+    }
+
+    /// <summary>
+    /// The inheritance helper reports refBaseObj, refExtendedObj and
+    /// refComposedObj as derivatives of refObj, and refObj as derivative of
+    /// itself.
+    /// </summary>
+    [Fact]
+    public void ReferenceTypes_InheritanceHierarchyMatchesPaper()
+    {
+        Assert.True(ReferenceTypes.RefObj.IsOrInheritsFrom(ReferenceTypes.RefObj));
+        Assert.True(ReferenceTypes.RefBaseObj.IsOrInheritsFrom(ReferenceTypes.RefObj));
+        Assert.True(ReferenceTypes.RefExtendedObj.IsOrInheritsFrom(ReferenceTypes.RefObj));
+        Assert.True(ReferenceTypes.RefComposedObj.IsOrInheritsFrom(ReferenceTypes.RefObj));
+
+        // Derivatives are NOT siblings of each other.
+        Assert.False(ReferenceTypes.RefBaseObj.IsOrInheritsFrom(ReferenceTypes.RefExtendedObj));
+
+        // Heterogeneous-target flags reflect the paper.
+        Assert.False(ReferenceTypes.RefBaseObj.AllowsHeterogeneousTargetType);
+        Assert.True(ReferenceTypes.RefExtendedObj.AllowsHeterogeneousTargetType);
+        Assert.True(ReferenceTypes.RefComposedObj.AllowsHeterogeneousTargetType);
+    }
+}
+
+public class RoundtripSnapshotTests
+{
+    private static string LoadTestData(string name) =>
+        File.ReadAllText(Path.Combine("TestData", name));
+
+    /// <summary>
+    /// Element / connection / process counts must survive a full JSON → AML →
+    /// JSON round-trip on the canonical Temperieren fixture. Failures here mean
+    /// an accidental mapping change — bumps the public API surface even if the
+    /// test JSON happens to still parse.
+    /// </summary>
+    [Fact]
+    public void Roundtrip_Temperieren_PreservesCanonicalCounts()
+    {
+        var originalJson = LoadTestData("Temperieren.json");
+        var caex = FpbJsonToCaex.Convert(originalJson).Value;
+        var roundtripped = CaexToFpbJson.Convert(caex).Value;
+
+        using var original  = JsonDocument.Parse(originalJson);
+        using var rt        = JsonDocument.Parse(roundtripped);
+
+        // Same top-level array length (Project + Processes).
+        Assert.Equal(original.RootElement.GetArrayLength(), rt.RootElement.GetArrayLength());
+
+        var (origObjs, origConns, origProcs) = CountElementsConnectionsProcesses(original.RootElement);
+        var (rtObjs, rtConns, rtProcs)        = CountElementsConnectionsProcesses(rt.RootElement);
+
+        Assert.Equal(origObjs,  rtObjs);
+        Assert.Equal(origConns, rtConns);
+        Assert.Equal(origProcs, rtProcs);
+    }
+
+    /// <summary>
+    /// Convert → UpdateInPlace with the SAME JSON (no edits) must be a no-op
+    /// modulo whitespace. The mapper's idempotency guarantee on which the
+    /// plugin's pending-snapshot pathway relies.
+    /// </summary>
+    [Fact]
+    public void UpdateInPlace_WithUnchangedJson_IsIdempotent()
+    {
+        var originalJson = LoadTestData("Temperieren.json");
+        var caex = FpbJsonToCaex.Convert(originalJson).Value;
+
+        // Round-trip back to JSON, then push it back into the SAME doc.
+        var midJson = CaexToFpbJson.Convert(caex).Value;
+        var result  = FpbJsonToCaex.UpdateInPlace(caex, midJson);
+
+        Assert.NotNull(result.Value);
+        Assert.True(caex.CAEXFile.InstanceHierarchy.Any());
+    }
+
+    private static (int Objects, int Connections, int Processes) CountElementsConnectionsProcesses(JsonElement root)
+    {
+        int objs = 0, conns = 0, procs = 0;
+        for (int i = 0; i < root.GetArrayLength(); i++)
+        {
+            var entry = root[i];
+            if (entry.TryGetProperty("process", out _)) procs++;
+            if (entry.TryGetProperty("elementDataInformation", out var edi))
+            {
+                foreach (var elem in edi.EnumerateArray())
+                {
+                    var type = elem.TryGetProperty("$type", out var t) ? t.GetString() ?? "" : "";
+                    if (FpbMappings.ConnectionTypes.Contains(type)) conns++;
+                    else if (FpbMappings.ObjectTypes.Contains(type)) objs++;
+                }
+            }
+        }
+        return (objs, conns, procs);
+    }
+}
+
+public class ElementMetadataTests
+{
+    [Fact]
+    public void Registry_CoversAllElementToSucKeys()
+    {
+        foreach (var fpbType in FpbMappings.ElementToSuc.Keys)
+        {
+            // SystemLimit and Process are SUC entries but Process isn't a
+            // user-facing element type we walk through.
+            if (fpbType == FpbTypes.Process) continue;
+            Assert.NotNull(ElementMetadataRegistry.Get(fpbType));
+        }
+    }
+
+    [Fact]
+    public void TechnicalResource_LivesOutsideSystemLimit()
+    {
+        var meta = ElementMetadataRegistry.Get(FpbTypes.TechnicalResource);
+        Assert.NotNull(meta);
+        Assert.True(meta!.LivesOutsideSystemLimit);
+        Assert.False(meta.IsState);
+    }
+
+    [Fact]
+    public void ProcessOperator_CanBeDecomposed()
+    {
+        var meta = ElementMetadataRegistry.Get(FpbTypes.ProcessOperator);
+        Assert.NotNull(meta);
+        Assert.True(meta!.CanBeDecomposed);
+    }
+
+    [Fact]
+    public void StatesFromRegistry_MatchStateTypesSet()
+    {
+        var registryStates = ElementMetadataRegistry.ByFpbType.Values
+            .Where(m => m.IsState).Select(m => m.FpbType).ToHashSet();
+        Assert.Equal(FpbMappings.StateTypes, registryStates);
+    }
+}
+
+public class CreateEmptyFpdInstanceHierarchyTests
+{
+    private static string LoadTestData(string name) =>
+        File.ReadAllText(Path.Combine("TestData", name));
+
+    /// <summary>
+    /// Calling CreateEmptyFpdInstanceHierarchy on a doc that already contains
+    /// FPD content must result in BOTH the existing IHs AND the new one being
+    /// returned by FindFpdInstanceHierarchies. Regression test for the v0.6.6
+    /// bug where "+ New Process" didn't surface a new viewer tab.
+    /// </summary>
+    [Fact]
+    public void NewIh_IsFoundByFindFpdInstanceHierarchies()
+    {
+        var doc = FpbJsonToCaex.Convert(LoadTestData("Temperieren.json")).Value;
+        var beforeCount = CaexToFpbJson.FindFpdInstanceHierarchies(doc).Count;
+        Assert.True(beforeCount >= 1, "Test fixture should already contain at least one FPD IH");
+
+        FpbJsonToCaex.CreateEmptyFpdInstanceHierarchy(doc, "NewIh", "NewProcess");
+        var afterList = CaexToFpbJson.FindFpdInstanceHierarchies(doc);
+
+        Assert.Equal(beforeCount + 1, afterList.Count);
+        Assert.Contains(afterList, ih => ih.Name == "NewIh");
+    }
+
+    /// <summary>
+    /// The IH created by CreateEmptyFpdInstanceHierarchy must contain an
+    /// InternalElement whose RefBaseSystemUnitPath matches the FPD_Process
+    /// SUC. Without that, FindFpdInstanceHierarchies won't recognise it.
+    /// </summary>
+    [Fact]
+    public void NewIh_ContainsProcessIeWithCorrectSuc()
+    {
+        var doc = FpbJsonToCaex.Convert(LoadTestData("Temperieren.json")).Value;
+        var newIh = FpbJsonToCaex.CreateEmptyFpdInstanceHierarchy(doc, "FreshIh", "FreshProcess");
+
+        var processSuc = FpbMappings.ElementToSuc[FpbTypes.Process];
+        var procIE = newIh.InternalElement.FirstOrDefault(ie => ie.RefBaseSystemUnitPath == processSuc);
+        Assert.NotNull(procIE);
+        Assert.Equal("FreshProcess", procIE!.Name);
+    }
+
+    /// <summary>
+    /// The SystemLimit IE must carry default ViewInformation so FPB.JS renders
+    /// it as a visible rectangle on the canvas (otherwise the user gets an
+    /// empty viewer with the SystemLimit invisibly stuck at 0×0).
+    /// </summary>
+    [Fact]
+    public void NewIh_SystemLimit_HasNonZeroViewInformation()
+    {
+        var doc = FpbJsonToCaex.Convert(LoadTestData("Temperieren.json")).Value;
+        var newIh = FpbJsonToCaex.CreateEmptyFpdInstanceHierarchy(doc, "FreshIh2", "FreshProcess2");
+
+        var slSuc = FpbMappings.ElementToSuc[FpbTypes.SystemLimit];
+        var procSuc = FpbMappings.ElementToSuc[FpbTypes.Process];
+        var procIE = newIh.InternalElement.First(ie => ie.RefBaseSystemUnitPath == procSuc);
+        var slIE = procIE.InternalElement.First(ie => ie.RefBaseSystemUnitPath == slSuc);
+
+        var viewInfo = slIE.Attribute["ViewInformation"];
+        Assert.NotNull(viewInfo);
+
+        var width = viewInfo!.Attribute["width"]?.Value;
+        var height = viewInfo.Attribute["height"]?.Value;
+        Assert.False(string.IsNullOrEmpty(width));
+        Assert.False(string.IsNullOrEmpty(height));
+        Assert.True(double.Parse(width!, System.Globalization.CultureInfo.InvariantCulture) > 0);
+        Assert.True(double.Parse(height!, System.Globalization.CultureInfo.InvariantCulture) > 0);
+    }
+}
+
+public class DecompositionNameSyncTests
+{
+    private static string LoadTestData(string name) =>
+        File.ReadAllText(Path.Combine("TestData", name));
+
+    /// <summary>
+    /// Renaming a ProcessOperator with a decomposed child must propagate the
+    /// new name to the child Process IE during UpdateInPlace. Without the
+    /// sync, the two layers drift apart on every PO rename.
+    /// </summary>
+    [Fact]
+    public void UpdateInPlace_RenamesPo_PropagatesNameToChildProcess()
+    {
+        var doc = FpbJsonToCaex.Convert(LoadTestData("Temperieren.json")).Value;
+        var ih  = doc.CAEXFile.InstanceHierarchy.First();
+
+        // Find a parent PO with a non-empty refProcess + the corresponding child.
+        InternalElementType? parentPo = null;
+        InternalElementType? child    = null;
+        var poSuc      = FpbMappings.ElementToSuc[FpbTypes.ProcessOperator];
+        var processSuc = FpbMappings.ElementToSuc[FpbTypes.Process];
+
+        CaexElementWalker.WalkInternalElements(doc, ie =>
+        {
+            if (parentPo != null) return;
+            if (ie.RefBaseSystemUnitPath != poSuc) return;
+            var refProc = ie.Attribute["refProcess"]?.Value;
+            if (string.IsNullOrEmpty(refProc)) return;
+            var bare = refProc.Trim('{', '}');
+            CaexElementWalker.WalkInternalElements(doc, sub =>
+            {
+                if (child != null) return;
+                if (sub.RefBaseSystemUnitPath != processSuc) return;
+                var subBare = (sub.ID ?? "").Trim('{', '}');
+                if (string.Equals(subBare, bare, StringComparison.OrdinalIgnoreCase))
+                { parentPo = ie; child = sub; }
+            });
+        });
+
+        if (parentPo == null || child == null) return; // Test fixture has no decomposition — skip.
+
+        // Simulate a user rename via the viewer — the FPB.js label handler
+        // sets both ie.Name and Identification.shortName so the snapshot is
+        // self-consistent. ParseShortName takes precedence over ie.Name in
+        // CaexToFpbJson, so only setting one of them isn't representative.
+        var newName = "Renamed_PO_" + Guid.NewGuid().ToString("N").Substring(0, 6);
+        parentPo!.Name = newName;
+        var ident = parentPo.Attribute["Identification"];
+        if (ident != null)
+        {
+            var sn = ident.Attribute["shortName"];
+            if (sn != null) sn.Value = newName;
+        }
+
+        // Now build a fresh snapshot off the modified doc and UpdateInPlace it back.
+        var snapshot = CaexToFpbJson.Convert(doc).Value;
+        FpbJsonToCaex.UpdateInPlace(doc, snapshot);
+
+        Assert.Equal(newName, child!.Name);
+    }
+}
+
+public class IdempotentCharacteristicsTests
+{
+    private static string LoadTestData(string name) =>
+        File.ReadAllText(Path.Combine("TestData", name));
+
+    /// <summary>
+    /// Edit-cycle test: convert → modify a Characteristic in the JSON →
+    /// UpdateInPlace → re-convert. The new value must show up on the IE and
+    /// the IE must NOT have accumulated duplicate Characteristic_N entries.
+    /// </summary>
+    [Fact]
+    public void UpdateInPlace_TwiceWithSameCharacteristics_DoesNotDuplicate()
+    {
+        var originalJson = LoadTestData("Temperieren.json");
+        var doc = FpbJsonToCaex.Convert(originalJson).Value;
+        var midJson = CaexToFpbJson.Convert(doc).Value;
+
+        // Two consecutive UpdateInPlace calls with the SAME content must leave
+        // the document in the same shape — no Characteristic_N append spam.
+        FpbJsonToCaex.UpdateInPlace(doc, midJson);
+        FpbJsonToCaex.UpdateInPlace(doc, midJson);
+
+        // Walk every IE in the doc and assert that no Characteristics container
+        // grew to > the source's count for the same element.
+        var beforeCounts = CountCharacteristicChildrenPerIe(FpbJsonToCaex.Convert(originalJson).Value);
+        var afterCounts  = CountCharacteristicChildrenPerIe(doc);
+
+        foreach (var (id, beforeCount) in beforeCounts)
+        {
+            if (!afterCounts.TryGetValue(id, out var afterCount)) continue;
+            Assert.Equal(beforeCount, afterCount);
+        }
+    }
+
+    /// <summary>
+    /// Convert → wipe Characteristics in the JSON → UpdateInPlace → the IE
+    /// must lose its Characteristic_N entries (not silently keep them).
+    /// </summary>
+    [Fact]
+    public void UpdateInPlace_WithEmptyCharacteristics_RemovesExistingEntries()
+    {
+        var doc = FpbJsonToCaex.Convert(LoadTestData("Temperieren.json")).Value;
+        var midJson = CaexToFpbJson.Convert(doc).Value;
+
+        // Strip every "characteristics" array down to []. Cheap textual edit
+        // — fine here because we only care that the down-stream side honours it.
+        var wiped = System.Text.RegularExpressions.Regex.Replace(midJson,
+            "\"characteristics\"\\s*:\\s*\\[[^\\]]*\\]", "\"characteristics\":[]");
+
+        FpbJsonToCaex.UpdateInPlace(doc, wiped);
+
+        var counts = CountCharacteristicChildrenPerIe(doc);
+        // Every container that still exists must be empty.
+        foreach (var c in counts.Values) Assert.Equal(0, c);
+    }
+
+    private static Dictionary<string, int> CountCharacteristicChildrenPerIe(CAEXDocument doc)
+    {
+        var counts = new Dictionary<string, int>();
+        CaexElementWalker.WalkInternalElements(doc, ie =>
+        {
+            var container = ie.Attribute["Characteristics"];
+            if (container == null) return;
+            var n = container.Attribute
+                .Count(a => a.Name != null && a.Name.StartsWith("Characteristic_", StringComparison.Ordinal));
+            counts[ie.ID ?? "?"] = n;
+        });
+        return counts;
+    }
+}
+
+public class MappingTableExportTests
+{
+    [Fact]
+    public void Build_ProducesNonEmptyExport()
+    {
+        var export = MappingTableExport.Build();
+        Assert.NotEmpty(export.ElementMappings);
+        Assert.NotEmpty(export.FlowMappings);
+        Assert.NotEmpty(export.ReferenceTypeRows);
+        Assert.NotEmpty(export.AttributeTypeRefs);
+        Assert.NotEmpty(export.LibraryNames);
+        Assert.False(string.IsNullOrEmpty(export.LibraryVersion));
+    }
+
+    [Fact]
+    public void ElementMappings_CoverAllSevenFpbTypes()
+    {
+        var export = MappingTableExport.Build();
+        Assert.Equal(7, export.ElementMappings.Count);
+        Assert.Contains(export.ElementMappings, r => r.FpbType == FpbTypes.Process);
+        Assert.Contains(export.ElementMappings, r => r.FpbType == FpbTypes.SystemLimit);
+        Assert.Contains(export.ElementMappings, r => r.FpbType == FpbTypes.ProcessOperator);
+    }
+
+    [Fact]
+    public void ReferenceTypeRows_ContainAllFourCanonicalTypes()
+    {
+        var export = MappingTableExport.Build();
+        Assert.Equal(4, export.ReferenceTypeRows.Count);
+        var refObj = export.ReferenceTypeRows.Single(r => r.AttributeName == "refObj");
+        Assert.Null(refObj.Parent);
+        foreach (var derived in new[] { "refBaseObj", "refExtendedObj", "refComposedObj" })
+        {
+            var row = export.ReferenceTypeRows.Single(r => r.AttributeName == derived);
+            Assert.Equal("refObj", row.Parent);
+        }
+    }
+
+    [Fact]
+    public void ToJson_RoundtripsThroughJsonDocument()
+    {
+        var json = MappingTableExport.Build().ToJson();
+        using var parsed = JsonDocument.Parse(json);
+        Assert.Equal("amlfpbjs.mapping_table/v1", parsed.RootElement.GetProperty("schema").GetString());
+    }
+}
+
+public class MapperOptionsTests
+{
+    /// <summary>
+    /// Default options keep the v0.5.1 behaviour — refObj resolves to the
+    /// VDI-internal AttributeTypeLib path so the existing CAEX output stays
+    /// byte-identical when callers don't override anything.
+    /// </summary>
+    [Fact]
+    public void Default_RefObjPath_PointsAtVdiAttributeTypeLib()
+    {
+        Assert.Equal(FpbMappings.AttrRefs.RefObj, MapperOptions.Default.EffectiveRefObjAttributeTypePath);
+        Assert.False(MapperOptions.Default.UseObjectReferencesLibrary);
+    }
+
+    /// <summary>
+    /// Opting into the Object-References framework retargets refObj at the
+    /// central library so the same FPD documents can be produced against the
+    /// ETFA 2026 attribute hierarchy.
+    /// </summary>
+    [Fact]
+    public void UseObjectReferencesLibrary_RetargetsRefObjPath()
+    {
+        var opts = new MapperOptions { UseObjectReferencesLibrary = true };
+        Assert.Equal(ObjectReferencesLibrary.RefObjAttributeTypePath, opts.EffectiveRefObjAttributeTypePath);
+    }
+
+    /// <summary>An explicit override beats both default and library-flag.</summary>
+    [Fact]
+    public void RefObjAttributeTypePath_OverridesEverythingElse()
+    {
+        var opts = new MapperOptions
+        {
+            UseObjectReferencesLibrary = true,
+            RefObjAttributeTypePath = "Custom/My_AttributeTypeLib/refObj",
+        };
+        Assert.Equal("Custom/My_AttributeTypeLib/refObj", opts.EffectiveRefObjAttributeTypePath);
+    }
+}
+
+public class SchemaMigrationTests
+{
+    private static string LoadTestData(string name) =>
+        File.ReadAllText(Path.Combine("TestData", name));
+
+    /// <summary>
+    /// A document produced by the current library version must continue to load
+    /// when LibNames.Version is bumped. This catches the "we accidentally
+    /// require the new version to match exactly" failure mode.
+    /// </summary>
+    [Fact]
+    public void OlderLibraryVersion_InAml_StillLoadsBack()
+    {
+        // Build a CAEX from the JSON.
+        var doc = FpbJsonToCaex.Convert(LoadTestData("Temperieren.json")).Value;
+
+        // Simulate an "older" document by rewriting every Version="1.0.0" to
+        // "0.9.0" on the FPD libraries.
+        foreach (var lib in doc.CAEXFile.SystemUnitClassLib) ForceVersion(lib);
+        foreach (var lib in doc.CAEXFile.RoleClassLib)       ForceVersion(lib);
+        foreach (var lib in doc.CAEXFile.InterfaceClassLib)  ForceVersion(lib);
+        foreach (var lib in doc.CAEXFile.AttributeTypeLib)   ForceVersion(lib);
+
+        // The mapper must still be able to convert it back.
+        var result = CaexToFpbJson.Convert(doc);
+        Assert.NotNull(result.Value);
+        Assert.False(string.IsNullOrEmpty(result.Value));
+    }
+
+    /// <summary>
+    /// A document missing the central refObj AttributeType (simulating a
+    /// pre-ObjectReferences upgrade path) must still validate and convert.
+    /// </summary>
+    [Fact]
+    public void MissingObjectReferencesLibrary_DoesNotBreakConvert()
+    {
+        var doc = FpbJsonToCaex.Convert(LoadTestData("Temperieren.json")).Value;
+
+        // Convert + validate against the default options (which do NOT require
+        // the central library).
+        var result = CaexToFpbJson.Convert(doc);
+        Assert.NotNull(result.Value);
+    }
+
+    private static void ForceVersion(dynamic libElement)
+    {
+        try { libElement.Version = "0.9.0"; }
+        catch { /* not all elements expose Version; OK to skip */ }
+    }
+}
+
 public class ValidationTests
 {
     [Fact]

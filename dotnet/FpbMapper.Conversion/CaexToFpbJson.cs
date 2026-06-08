@@ -31,7 +31,7 @@ public static class CaexToFpbJson
     public static IReadOnlyList<InstanceHierarchyType> FindFpdInstanceHierarchies(CAEXDocument doc)
     {
         if (doc?.CAEXFile == null) return Array.Empty<InstanceHierarchyType>();
-        var processSuc = ElementToSuc["fpb:Process"];
+        var processSuc = ElementToSuc[FpbTypes.Process];
         return doc.CAEXFile.InstanceHierarchy
             .Where(ih => ih.InternalElement.Any(ie => ie.RefBaseSystemUnitPath == processSuc))
             .ToList();
@@ -49,7 +49,7 @@ public static class CaexToFpbJson
 
         // Collect all FPD_Process InternalElements (flat in IH)
         var allProcessIEs = ih.InternalElement
-            .Where(ie => ie.RefBaseSystemUnitPath == ElementToSuc["fpb:Process"])
+            .Where(ie => ie.RefBaseSystemUnitPath == ElementToSuc[FpbTypes.Process])
             .ToList();
 
         if (allProcessIEs.Count == 0)
@@ -68,7 +68,7 @@ public static class CaexToFpbJson
 
             foreach (var ie in procIE.InternalElement)
             {
-                if (ie.RefBaseSystemUnitPath == ElementToSuc["fpb:ProcessOperator"])
+                if (ie.RefBaseSystemUnitPath == ElementToSuc[FpbTypes.ProcessOperator])
                 {
                     poToProcessAmlId[ie.ID] = procIE.ID;
                     var poRefProcess = GetRefProcessValue(ie);
@@ -100,7 +100,7 @@ public static class CaexToFpbJson
             var ediList = (List<Dictionary<string, object>>)entry["elementDataInformation"];
             foreach (var elem in ediList)
             {
-                if ((string)elem["$type"] == "fpb:ProcessOperator" && elem.ContainsKey("_amlId"))
+                if ((string)elem["$type"] == FpbTypes.ProcessOperator && elem.ContainsKey("_amlId"))
                 {
                     var amlId = (string)elem["_amlId"];
                     if (poRefObjMap.TryGetValue(amlId, out var childProcessAmlId) &&
@@ -143,7 +143,7 @@ public static class CaexToFpbJson
             var ediList = (List<Dictionary<string, object>>)entry["elementDataInformation"];
             foreach (var elem in ediList)
             {
-                if ((string)elem["$type"] == "fpb:ProcessOperator" && elem.ContainsKey("decomposedView"))
+                if ((string)elem["$type"] == FpbTypes.ProcessOperator && elem.ContainsKey("decomposedView"))
                 {
                     elem["decomposedView"] = elem["id"];
                     elem.Remove("_amlId");
@@ -163,7 +163,7 @@ public static class CaexToFpbJson
         {
             new Dictionary<string, object>
             {
-                ["$type"] = "fpb:Project",
+                ["$type"] = FpbTypes.Project,
                 ["name"] = ih.Name ?? "FPBJS_Project",
                 ["targetNamespace"] = "http://www.hsu-ifa.de/fpbjs",
                 ["entryPoint"] = entryProcessFpbId,
@@ -205,7 +205,7 @@ public static class CaexToFpbJson
         // Process SystemLimit first
         string? systemLimitId = null;
         var systemLimitIE = processIE.InternalElement
-            .FirstOrDefault(ie => ie.RefBaseSystemUnitPath == ElementToSuc["fpb:SystemLimit"]);
+            .FirstOrDefault(ie => ie.RefBaseSystemUnitPath == ElementToSuc[FpbTypes.SystemLimit]);
 
         if (systemLimitIE != null)
         {
@@ -215,7 +215,7 @@ public static class CaexToFpbJson
 
             var slData = new Dictionary<string, object>
             {
-                ["$type"] = "fpb:SystemLimit",
+                ["$type"] = FpbTypes.SystemLimit,
                 ["id"] = systemLimitId,
                 ["elementsContainer"] = new List<string>(),
                 ["name"] = slName,
@@ -225,7 +225,7 @@ public static class CaexToFpbJson
             if (slVisual != null)
             {
                 slVisual["id"] = systemLimitId;
-                slVisual["type"] = "fpb:SystemLimit";
+                slVisual["type"] = FpbTypes.SystemLimit;
                 slVisual["markers"] = new Dictionary<string, object>();
                 elementVisualInformation.Add(slVisual);
             }
@@ -244,16 +244,24 @@ public static class CaexToFpbJson
             {
                 var suc = ie.RefBaseSystemUnitPath;
                 return !string.IsNullOrEmpty(suc) && SucToElement.ContainsKey(suc)
-                    && suc != ElementToSuc["fpb:Process"];
+                    && suc != ElementToSuc[FpbTypes.Process];
             }).ToList();
 
         var elementIdMap = new Dictionary<string, string>();
+
+        // Audit-v2 fix #2: pre-build the set of valid element IDs so the
+        // refObj export can validate its target lives in the current scope
+        // before emitting (otherwise stale refObj pointing at a removed PO
+        // leaks into the JSON file).
+        var validElementIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var ie in objectIEs)
+            validElementIds.Add(NormalizeId(ie.ID));
 
         foreach (var ie in objectIEs)
         {
             var sucPath = ie.RefBaseSystemUnitPath;
             if (!SucToElement.TryGetValue(sucPath, out var fpbType)) continue;
-            if (fpbType == "fpb:SystemLimit" || fpbType == "fpb:Process") continue;
+            if (fpbType == FpbTypes.SystemLimit || fpbType == FpbTypes.Process) continue;
 
             // Element ID takes the AML ID (stripped) so UpdateInPlace can match later.
             var elemId = NormalizeId(ie.ID);
@@ -282,7 +290,7 @@ public static class CaexToFpbJson
             // Check decomposition
             string? decomposedView = null;
             string? amlIdForPostProcess = null;
-            if (fpbType == "fpb:ProcessOperator")
+            if (fpbType == FpbTypes.ProcessOperator)
             {
                 var poRefProcess = GetRefProcessValue(ie);
                 if (poRefProcess != null)
@@ -310,6 +318,27 @@ public static class CaexToFpbJson
             // Characteristics
             elemData["characteristics"] = ParseCharacteristics(ie);
 
+            // Audit-fix #4: export refObj on states so the FPB.JS side (and
+            // round-trip consumers like the export-button JSON file) can see
+            // which sub-process states are boundary states (refObj set) vs
+            // pure child states (refObj empty). FPB.JS itself derives boundary
+            // semantics from geometry today, but downstream tooling reading
+            // the export should not have to.
+            if (ElementMetadataRegistry.Get(fpbType)?.IsState ?? false)
+            {
+                var refObjValue = ie.GetRefObjOrDerived();
+                if (!string.IsNullOrEmpty(refObjValue))
+                {
+                    var normalisedTarget = NormalizeId(refObjValue);
+                    // Audit-v2 fix #2: only emit refObj if the target actually
+                    // exists in this IH. Dangling refObjs come from POs that
+                    // were removed without clearing the back-references.
+                    if (validElementIds.Contains(normalisedTarget))
+                        elemData["refObj"] = normalisedTarget;
+                    // else: silently skip — stale ref shouldn't pollute the JSON.
+                }
+            }
+
             if (decomposedView != null)
             {
                 elemData["decomposedView"] = decomposedView;
@@ -328,11 +357,23 @@ public static class CaexToFpbJson
                 elementVisualInformation.Add(visual);
             }
 
-            // TechnicalResource lives outside the SystemLimit, not inside it
-            if (fpbType != "fpb:TechnicalResource")
+            // Behaviour flags routed through the element metadata registry —
+            // one row per FPB type instead of scattered fpbType == "fpb:X"
+            // string comparisons. Adding a new VDI 3682 element type is a
+            // single registry entry plus its FpbMappings.ElementToSuc row.
+            var meta = ElementMetadataRegistry.Get(fpbType);
+            if (meta == null)
+            {
+                // Unknown type — still add to containers to preserve the
+                // previous behaviour (warnings will pick up dangling refs).
                 elementsContainerIds.Add(elemId);
-            if (StateTypes.Contains(fpbType)) stateIds.Add(elemId);
-            if (fpbType == "fpb:ProcessOperator") poIds.Add(elemId);
+            }
+            else
+            {
+                if (!meta.LivesOutsideSystemLimit) elementsContainerIds.Add(elemId);
+                if (meta.IsState) stateIds.Add(elemId);
+                if (fpbType == FpbTypes.ProcessOperator) poIds.Add(elemId);
+            }
         }
 
         // Parse InternalLinks -> Flows
@@ -370,7 +411,7 @@ public static class CaexToFpbJson
                 ["targetRef"] = inSide.ElementId,
             };
 
-            if (flowType != "fpb:Flow" && flowType != "fpb:Usage")
+            if (flowType != FpbTypes.Flow && flowType != FpbTypes.Usage)
                 flowData["inTandemWith"] = new List<string>();
 
             flowDataMap[flowId] = flowData;
@@ -396,18 +437,18 @@ public static class CaexToFpbJson
 
             // isAssignedTo
             if (sourceElem != null && StateTypes.Contains((string)sourceElem["$type"]) &&
-                targetElem != null && (string)targetElem["$type"] == "fpb:ProcessOperator")
+                targetElem != null && (string)targetElem["$type"] == FpbTypes.ProcessOperator)
             {
                 var list = (List<string>)sourceElem["isAssignedTo"];
                 if (!list.Contains((string)targetElem["id"])) list.Add((string)targetElem["id"]);
             }
             if (targetElem != null && StateTypes.Contains((string)targetElem["$type"]) &&
-                sourceElem != null && (string)sourceElem["$type"] == "fpb:ProcessOperator")
+                sourceElem != null && (string)sourceElem["$type"] == FpbTypes.ProcessOperator)
             {
                 var list = (List<string>)targetElem["isAssignedTo"];
                 if (!list.Contains((string)sourceElem["id"])) list.Add((string)sourceElem["id"]);
             }
-            if (flowType == "fpb:Usage" && sourceElem != null && targetElem != null)
+            if (flowType == FpbTypes.Usage && sourceElem != null && targetElem != null)
             {
                 var srcList = (List<string>)sourceElem["isAssignedTo"];
                 var tgtList = (List<string>)targetElem["isAssignedTo"];
@@ -416,7 +457,7 @@ public static class CaexToFpbJson
             }
 
             // Usage connects to TechnicalResources outside the SystemLimit
-            if (flowType != "fpb:Usage")
+            if (flowType != FpbTypes.Usage)
                 elementsContainerIds.Add(flowId);
         }
 
@@ -442,6 +483,36 @@ public static class CaexToFpbJson
         foreach (var flow in flowDataMap.Values)
             elementDataInformation.Add(flow);
 
+        // Sanity check: every ID we put into elementsContainer / consistsOfStates
+        // / consistsOfProcessOperator MUST exist as an entry in
+        // elementDataInformation. Otherwise FPB.JS will look up `undefined.type`
+        // during import and crash with "Cannot read properties of undefined
+        // (reading 'type')". Strip references to elements we never emitted
+        // (typically AML elements with an unrecognised SUC).
+        var emittedIds = new HashSet<string>(elementDataInformation
+            .Select(e => (string)e["id"]));
+
+        int strippedCount = 0;
+        int beforeCount = elementsContainerIds.Count;
+        elementsContainerIds.RemoveAll(id => !emittedIds.Contains(id));
+        strippedCount += beforeCount - elementsContainerIds.Count;
+
+        beforeCount = stateIds.Count;
+        stateIds.RemoveAll(id => !emittedIds.Contains(id));
+        strippedCount += beforeCount - stateIds.Count;
+
+        beforeCount = poIds.Count;
+        poIds.RemoveAll(id => !emittedIds.Contains(id));
+        strippedCount += beforeCount - poIds.Count;
+
+        if (strippedCount > 0)
+        {
+            warnings.Add($"Process '{processIE.Name}': stripped {strippedCount} dangling element " +
+                         "reference(s) (IDs listed in container/states/POs but no matching elementData " +
+                         "entry — typically an AML InternalElement whose SUC could not be resolved to " +
+                         "an FPD type).");
+        }
+
         // Update SystemLimit's elementsContainer
         if (systemLimitId != null)
         {
@@ -454,13 +525,13 @@ public static class CaexToFpbJson
         {
             ["process"] = new Dictionary<string, object>
             {
-                ["$type"] = "fpb:Process",
+                ["$type"] = FpbTypes.Process,
                 ["id"] = processId,
                 ["elementsContainer"] = systemLimitId != null
                     ? new List<string>(new[] { systemLimitId }.Concat(
                         elementDataInformation
-                            .Where(e => (string)e["$type"] == "fpb:TechnicalResource"
-                                     || (string)e["$type"] == "fpb:Usage")
+                            .Where(e => (string)e["$type"] == FpbTypes.TechnicalResource
+                                     || (string)e["$type"] == FpbTypes.Usage)
                             .Select(e => (string)e["id"])))
                     : new List<string>(),
                 ["isDecomposedProcessOperator"] = parentPOId ?? (object)"",
@@ -483,10 +554,12 @@ public static class CaexToFpbJson
 
     private static string? GetRefObjValue(InternalElementType ie)
     {
-        var attr = ie.Attribute["refObj"];
-        if (attr == null) return null;
-        var val = attr.Value;
-        return string.IsNullOrEmpty(val) ? null : val;
+        // Routed through the reference-type abstraction so that documents which
+        // use refBaseObj / refExtendedObj / refComposedObj as the decomposition
+        // link (per the ETFA 2026 Object-References framework) are recognised
+        // without further code edits. refObj itself still wins when both are
+        // present, preserving back-compat with current VDI 3682 documents.
+        return ie.GetRefObjOrDerived();
     }
 
     private static string? GetRefProcessValue(InternalElementType ie)
@@ -499,26 +572,21 @@ public static class CaexToFpbJson
 
     private static string? ParseShortName(InternalElementType ie)
     {
-        var ident = ie.Attribute["Identification"];
+        var ident = ie.Attribute[IdentificationSchema.AttributeName];
         if (ident == null) return null;
-        var sn = ident.Attribute["shortName"];
+        var sn = ident.Attribute[IdentificationSchema.ShortName];
         return string.IsNullOrEmpty(sn?.Value) ? null : sn.Value;
     }
 
     private static Dictionary<string, object>? ParseIdentification(InternalElementType ie)
     {
-        var ident = ie.Attribute["Identification"];
+        var ident = ie.Attribute[IdentificationSchema.AttributeName];
         if (ident == null) return null;
 
-        return new Dictionary<string, object>
-        {
-            ["$type"] = "fpb:Identification",
-            ["uniqueIdent"] = ident.Attribute["uniqueIdent"]?.Value ?? "",
-            ["longName"] = ident.Attribute["longName"]?.Value ?? "",
-            ["shortName"] = ident.Attribute["shortName"]?.Value ?? "",
-            ["versionNumber"] = ident.Attribute["versionNumber"]?.Value ?? "",
-            ["revisionNumber"] = ident.Attribute["revisionNumber"]?.Value ?? "",
-        };
+        var result = new Dictionary<string, object> { ["$type"] = FpbTypes.Identification };
+        foreach (var field in IdentificationSchema.Fields)
+            result[field] = ident.Attribute[field]?.Value ?? "";
+        return result;
     }
 
     private static List<Dictionary<string, object>> ParseCharacteristics(InternalElementType ie)
