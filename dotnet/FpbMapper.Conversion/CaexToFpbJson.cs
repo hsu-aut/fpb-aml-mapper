@@ -249,10 +249,10 @@ public static class CaexToFpbJson
 
         var elementIdMap = new Dictionary<string, string>();
 
-        // Audit-v2 fix #2: pre-build the set of valid element IDs so the
-        // refObj export can validate its target lives in the current scope
-        // before emitting (otherwise stale refObj pointing at a removed PO
-        // leaks into the JSON file).
+        // Pre-build the set of valid element IDs so the refObj export can
+        // validate its target lives in the current scope before emitting.
+        // Otherwise a stale refObj pointing at a removed PO leaks into the
+        // JSON file.
         var validElementIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var ie in objectIEs)
             validElementIds.Add(NormalizeId(ie.ID));
@@ -330,7 +330,7 @@ public static class CaexToFpbJson
                 if (!string.IsNullOrEmpty(refObjValue))
                 {
                     var normalisedTarget = NormalizeId(refObjValue);
-                    // Audit-v2 fix #2: only emit refObj if the target actually
+                    // Only emit refObj if the target actually
                     // exists in this IH. Dangling refObjs come from POs that
                     // were removed without clearing the back-references.
                     if (validElementIds.Contains(normalisedTarget))

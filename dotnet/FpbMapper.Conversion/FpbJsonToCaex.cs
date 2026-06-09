@@ -205,7 +205,7 @@ public static class FpbJsonToCaex
         var processAddedCount = 0;
         var unmatchedSkippedCount = 0;
 
-        // Audit-v3 M1: TWO-PASS loop.
+        // TWO-PASS loop.
         //   Pass 1: resolve/add Process IEs + add/update Element IEs (NO connections).
         //   Pass 2: process connections (now every source/target is guaranteed in elementIndex).
         // Previously the order inside entry.ElementData was load-bearing — a flow listed
@@ -304,7 +304,7 @@ public static class FpbJsonToCaex
         // storm we saw on Decompose round-trips.
         // Per-element interface counters reused across the whole pass so
         // multiple parallel flows from the same element don't collide on
-        // ExternalInterface names (audit-v3 M4).
+        // ExternalInterface names.
         var ifaceCounters = new Dictionary<string, Dictionary<string, int>>();
         foreach (var (entry, entryIndex) in orderedEntries)
         {
@@ -436,9 +436,9 @@ public static class FpbJsonToCaex
 
         var ie = CreateInstance(sucLookup, sucName);
         ie.ID = WrapBraces(data.Id);
-        // Audit-v2 fix #6: use the same fallback as BuildProcess so a missing
-        // FPB.JS name yields "ProcessOperator" / "Product" / etc. consistently
-        // across green-field Convert and UpdateInPlace+AddElement code paths.
+        // Use the same fallback as BuildProcess so a missing FPB.JS name
+        // yields "ProcessOperator" / "Product" / etc. consistently across
+        // green-field Convert and UpdateInPlace+AddElement code paths.
         var typeLocalName = data.Type.Contains(':') ? data.Type.Split(':')[1] : sucName;
         ie.Name = !string.IsNullOrEmpty(data.Name) ? data.Name : typeLocalName;
         parent.Insert(ie);
@@ -450,10 +450,9 @@ public static class FpbJsonToCaex
         }
         else if (data.Type == FpbTypes.SystemLimit)
         {
-            // Audit-v2 fix #5: a freshly-added SystemLimit without visual data
-            // would render as a 0×0 invisible box in FPB.JS — same family as
-            // the v0.6.10 SystemLimit-from-CreateEmpty bug. Apply the same
-            // sensible defaults so the user gets a usable canvas.
+            // A freshly-added SystemLimit without visual data would render
+            // as a 0×0 invisible box in FPB.JS. Apply sensible defaults so
+            // the user gets a usable canvas.
             SetViewInformation(ie, new VisualInfo { X = 100, Y = 100, Width = 600, Height = 400 }, options);
             MapperTrace.Info(options, $"AddElement: SystemLimit '{ie.ID}' had no visual data in snapshot — applied default ViewInformation (100,100,600,400)");
         }
@@ -548,9 +547,20 @@ public static class FpbJsonToCaex
     {
         var processSuc = ElementToSuc[FpbTypes.Process];
 
+        // elementIndex is keyed by bare IDs (StripBraces). If the snapshot
+        // supplies a braced ID (legacy data, interop, manual edit), the raw
+        // lookup misses and we silently fall through to "no match". Mirror
+        // the defensive raw-then-bare pattern AddProcess already uses.
+        bool TryLookup(string id, out InternalElementType hit)
+        {
+            if (elementIndex.TryGetValue(id, out hit!)) return true;
+            var bare = StripBraces(id);
+            return !string.IsNullOrEmpty(bare) && elementIndex.TryGetValue(bare, out hit!);
+        }
+
         // Top-level case: entry.Process.Id is directly the process AML ID.
         if (string.IsNullOrEmpty(entry.Process.IsDecomposedProcessOperator)
-            && elementIndex.TryGetValue(entry.Process.Id, out var directHit)
+            && TryLookup(entry.Process.Id, out var directHit)
             && directHit.RefBaseSystemUnitPath == processSuc)
         {
             MapperTrace.Info(options, $"  ResolveProcess: matched TOP-LEVEL by ID — entry.process.id='{entry.Process.Id}' -> AML '{directHit.ID}' name='{directHit.Name}'");
@@ -561,7 +571,7 @@ public static class FpbJsonToCaex
         var parentPoId = string.IsNullOrEmpty(entry.Process.IsDecomposedProcessOperator)
             ? entry.Process.Id
             : entry.Process.IsDecomposedProcessOperator;
-        if (!elementIndex.TryGetValue(parentPoId, out var parentPo))
+        if (!TryLookup(parentPoId, out var parentPo))
         {
             MapperTrace.Info(options, $"  ResolveProcess: parent PO '{parentPoId}' not in elementIndex — no match");
             return null;
@@ -608,10 +618,10 @@ public static class FpbJsonToCaex
 
     /// <summary>Walk CAEXParent upwards and test whether <paramref name="ancestor"/> is on the path (P2 #1).</summary>
     /// <summary>
-    /// Audit-v3 M4: produce a unique ExternalInterface name per (element, baseName)
-    /// across a single conversion pass. Mirrors BuildProcess's GetNextInterfaceName
-    /// local helper so green-field Convert and incremental UpdateInPlace produce
-    /// consistent shapes.
+    /// Produce a unique ExternalInterface name per (element, baseName) across
+    /// a single conversion pass. Mirrors BuildProcess's GetNextInterfaceName
+    /// local helper so green-field Convert and incremental UpdateInPlace
+    /// produce consistent shapes.
     /// </summary>
     private static string GetUniqueInterfaceName(
         Dictionary<string, Dictionary<string, int>> counters,
@@ -663,10 +673,10 @@ public static class FpbJsonToCaex
         ElementData flowData,
         Dictionary<string, InternalElementType> elementIndex)
     {
-        // Audit-v3 M7: treat empty endpoints as a MISMATCH — same semantics as
-        // AddConnection (which rejects them) and Validate (which only checks
-        // non-empty). Previously this branch returned true, which kept stale
-        // links alive even when the snapshot had explicitly cleared the refs.
+        // Treat empty endpoints as a MISMATCH — same semantics as AddConnection
+        // (which rejects them) and Validate (which only checks non-empty).
+        // Returning true here would keep stale links alive even when the
+        // snapshot has explicitly cleared the refs.
         if (string.IsNullOrEmpty(flowData.SourceRef) || string.IsNullOrEmpty(flowData.TargetRef))
             return false;
         if (!elementIndex.TryGetValue(flowData.SourceRef, out var expectedSource)) return false;
@@ -775,10 +785,9 @@ public static class FpbJsonToCaex
             return null;
         }
 
-        // Audit-v3 M2: cross-process defence — warn when EITHER endpoint is
-        // outside procAml (was AND, which only caught both-outside). A flow
-        // whose source is in procAml but target is in a different process
-        // tree is also wrong; an ID collision can resolve to the wrong copy.
+        // Cross-process defence: warn when EITHER endpoint is outside procAml.
+        // A flow whose source is in procAml but target is in a different
+        // process tree is wrong; an ID collision can resolve to the wrong copy.
         if (!IsDescendantOf(sourceIE, procAml) || !IsDescendantOf(targetIE, procAml))
         {
             var sourceHost = FindHostProcessName(sourceIE);
@@ -787,11 +796,11 @@ public static class FpbJsonToCaex
                          $"'{procAml.Name}' — source lives in '{sourceHost}', target lives in '{targetHost}' — link may target the wrong layer.");
         }
 
-        // Audit-v3 M4: ExternalInterface name uniqueness across the whole pass.
-        // Two parallel flows from the same element previously got two
-        // ExternalInterfaces named e.g. "FPD_FlowOut" — AML allows it but the
-        // round-trip reader can't tell them apart. Suffix with _2, _3, …
-        // matching BuildProcess's GetNextInterfaceName scheme.
+        // ExternalInterface name uniqueness across the whole pass. Two
+        // parallel flows from the same element would otherwise both get e.g.
+        // "FPD_FlowOut" — AML allows it but the round-trip reader can't tell
+        // them apart. Suffix with _2, _3, … matching BuildProcess's
+        // GetNextInterfaceName scheme.
         ifaceCounters ??= new Dictionary<string, Dictionary<string, int>>();
         var outBaseName = ifacePaths.Out.Split('/')[1];
         var sourceIface = sourceIE.ExternalInterface.Append(
@@ -1105,11 +1114,10 @@ public static class FpbJsonToCaex
         Dictionary<string, InternalElementType> elementIndex,
         MapperOptions? options = null)
     {
-        // Audit-v3 M3: every entry (top-level OR sub-process) can be a parent
-        // for a deeper sub-process — grandchild decompositions need to find
-        // their parent which is itself a sub-process. Previously we filtered
-        // to top-level entries only and silently dropped multi-level state
-        // syncs.
+        // Every entry (top-level OR sub-process) can be a parent for a deeper
+        // sub-process — grandchild decompositions need to find their parent
+        // which is itself a sub-process. Filtering to top-level entries only
+        // would silently drop multi-level state syncs.
         var parentEntries = entries.ToList();
 
         int updated = 0;
@@ -1185,10 +1193,10 @@ public static class FpbJsonToCaex
         {
             var bare = StripBraces(ie.ID);
             if (string.IsNullOrEmpty(bare)) return;
-            // Audit-v2 fix #1: duplicate IDs in sibling sub-process branches
-            // would silently overwrite an earlier IE in the flat index, then
-            // SyncBoundaryStateRefObjs / AddConnection / etc. would mutate the
-            // wrong element. Surface the collision so we can see it.
+            // Duplicate IDs in sibling sub-process branches would silently
+            // overwrite an earlier IE in the flat index, then SyncBoundaryState
+            // RefObjs / AddConnection / etc. would mutate the wrong element.
+            // Surface the collision.
             if (index.TryGetValue(bare, out var existing))
             {
                 var msg = $"BuildElementIndex: duplicate ID '{bare}' detected — existing parent='{existing.CAEXParent?.ToString() ?? "?"}' name='{existing.Name}', " +
@@ -1362,9 +1370,8 @@ public static class FpbJsonToCaex
             }
             else
             {
-                // Audit-v3 M6: same family as the AddElement defaults — a green-field
-                // import whose snapshot lacks SystemLimit visuals would otherwise
-                // render as a 0×0 invisible box in FPB.JS.
+                // Defaults for the SystemLimit when the snapshot lacks visual
+                // data — otherwise it renders as a 0×0 invisible box in FPB.JS.
                 SetViewInformation(slIE, new VisualInfo { X = 100, Y = 100, Width = 600, Height = 400 }, options);
                 MapperTrace.Info(options, $"BuildProcess: SystemLimit '{slIE.ID}' had no visual data — applied default ViewInformation (100,100,600,400)");
             }
@@ -1612,9 +1619,9 @@ public static class FpbJsonToCaex
         else
         {
             // Fallback: create if missing (shouldn't happen with proper SUC).
-            // Audit-v2 fix #8: mirror the main-path semantics — empty becomes
-            // "" not null, so consumers see a consistent state regardless of
-            // whether the attribute was pre-existing or freshly created.
+            // Mirror the main-path semantics — empty becomes "" not null, so
+            // consumers see a consistent state regardless of whether the
+            // attribute was pre-existing or freshly created.
             var newAttr = ie.Attribute.Append(name);
             newAttr.AttributeDataType = "xs:string";
             newAttr.Value = value ?? string.Empty;
@@ -1741,12 +1748,11 @@ public static class FpbJsonToCaex
 
     private static void SetSubAttr(AttributeType parent, string name, string? value)
     {
-        // Audit-v3 M5: empty/null writes used to be silently skipped, which
-        // meant the user clearing Identification fields (longName, shortName,
+        // Empty/null writes used to be silently skipped, which meant the
+        // user clearing Identification fields (longName, shortName,
         // versionNumber, revisionNumber) didn't actually clear anything — the
-        // old value stuck around in AML. Same family as the SetAttrValue
-        // empty-clear fix from audit-v1. Now we write "" explicitly so the
-        // reader sees the user-intended cleared state.
+        // old value stuck around in AML. Write "" explicitly so the reader
+        // sees the user-intended cleared state.
         var attr = parent.Attribute[name];
         if (attr != null)
             attr.Value = value ?? string.Empty;
@@ -1830,7 +1836,7 @@ public static class FpbJsonToCaex
         if (!entries.Any(e => e.Process.Id == project.EntryPoint))
             throw new InvalidOperationException($"Entry point '{project.EntryPoint}' not found in process entries.");
 
-        // Audit-v2 fix #9: NormalizeId in FpbJsonToCaex (wrap) and CaexToFpbJson
+        // NormalizeId in FpbJsonToCaex (wrap) and CaexToFpbJson
         // (strip) are inverse for GUIDs but not for custom strings. Warn early
         // if we see non-GUID IDs so a round-trip divergence has a paper trail.
         foreach (var entry in entries)
