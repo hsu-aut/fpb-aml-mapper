@@ -910,10 +910,11 @@ public class UpdateInPlaceEditTests
     private static InternalElementType? FindSubProcessByRefObj(InstanceHierarchyType ih, string parentPoBareId)
     {
         var processSuc = ElementToSuc["fpb:Process"];
-        var wrapped = "{" + parentPoBareId + "}";
+        // refObj is stored brace-free (= the parent PO's uniqueIdent); compare on the
+        // bare id so the check tracks identity, not the serialization format.
         return ih.InternalElement.FirstOrDefault(ie =>
             ie.RefBaseSystemUnitPath == processSuc
-            && string.Equals(ie.Attribute["refObj"]?.Value, wrapped, StringComparison.OrdinalIgnoreCase));
+            && string.Equals((ie.Attribute["refObj"]?.Value ?? "").Trim('{', '}'), parentPoBareId, StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>

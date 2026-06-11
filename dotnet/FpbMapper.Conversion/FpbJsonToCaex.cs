@@ -576,10 +576,12 @@ public static class FpbJsonToCaex
             MapperTrace.Info(options, $"  ResolveProcess: parent PO '{parentPoId}' not in elementIndex — no match");
             return null;
         }
-        var parentPoAmlId = parentPo.ID;
+        // refObj is stored brace-free (uniqueIdent convention); compare brace-insensitively
+        // so both current and legacy (braced) sub-process back-links still resolve.
+        var parentPoBareId = StripBraces(parentPo.ID);
         var subHit = fpdIH.InternalElement.FirstOrDefault(ie =>
             ie.RefBaseSystemUnitPath == processSuc
-            && (ie.GetRefObjOrDerived() ?? "") == parentPoAmlId);
+            && StripBraces(ie.GetRefObjOrDerived() ?? "") == parentPoBareId);
         if (subHit != null)
             MapperTrace.Info(options, $"  ResolveProcess: matched SUB-PROCESS via refObj — parent PO '{parentPo.ID}' name='{parentPo.Name}' -> sub-process '{subHit.ID}' name='{subHit.Name}'");
         else
@@ -997,7 +999,10 @@ public static class FpbJsonToCaex
         procIE.ID = DeriveSubProcessId(StripBraces(parentPo.ID));
         procIE.Name = parentPo.Name ?? "Sub-Process";
         fpdIH.Insert(procIE);
-        SetAttrValue(procIE, "refObj", parentPo.ID);
+        // refObj must be brace-free (= the parent PO's uniqueIdent, per the AML-Editor
+        // convention and green-field Convert). Earlier this stored the braced AML ID,
+        // which made VDI 3682 rule F1 (refObj resolves to a uniqueIdent) fail.
+        SetAttrValue(procIE, "refObj", StripBraces(parentPo.ID));
 
         // NOTE: do NOT pre-create FPD_SystemLimit here. The incoming entry's
         // ElementData carries a fpb:SystemLimit element with the FPB.JS-side ID,
