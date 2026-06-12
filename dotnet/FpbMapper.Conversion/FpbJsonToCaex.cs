@@ -1154,7 +1154,9 @@ public static class FpbJsonToCaex
                 if (!elementIndex.TryGetValue(stateBare, out var stateIe)) continue;
                 if (stateIe.CAEXParent == null) continue;
 
-                var expected = parentStateIds.Contains(stateBare) ? NormalizeId(data.Id) : "";
+                // brace-free: refObj carries the uniqueIdent form (VDI 3682 rule F1 resolves it
+                // against identification.uniqueIdent, which is stored without braces).
+                var expected = parentStateIds.Contains(stateBare) ? StripBraces(NormalizeId(data.Id)) : "";
                 var current  = stateIe.Attribute["refObj"]?.Value ?? "";
                 if (!string.Equals(current, expected, StringComparison.Ordinal))
                 {
@@ -1358,8 +1360,8 @@ public static class FpbJsonToCaex
         procIE.ID = processAmlIds[processId];
         ih.Insert(procIE);
 
-        // refObj: child processes point to parent PO
-        SetAttrValue(procIE, "refObj", !string.IsNullOrEmpty(parentPOId) ? NormalizeId(parentPOId) : "");
+        // refObj: child processes point to parent PO (brace-free = uniqueIdent convention)
+        SetAttrValue(procIE, "refObj", !string.IsNullOrEmpty(parentPOId) ? StripBraces(NormalizeId(parentPOId)) : "");
 
         // SystemLimit
         if (slData != null)
@@ -1464,7 +1466,7 @@ public static class FpbJsonToCaex
                 {
                     var parentState = parentEntry.ElementData.FirstOrDefault(e =>
                         e.Id == obj.Id && StateTypes.Contains(e.Type));
-                    SetAttrValue(ie, "refObj", parentState != null ? NormalizeId(obj.Id) : "");
+                    SetAttrValue(ie, "refObj", parentState != null ? StripBraces(NormalizeId(obj.Id)) : "");
                 }
                 else
                 {
