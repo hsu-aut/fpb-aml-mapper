@@ -600,11 +600,18 @@ public static class CaexToFpbJson
         {
             var c = new Dictionary<string, object>();
 
+            // $type tags are mandatory: FPB.JS buildCharacteristics skips any
+            // characteristic without ch.$type === 'fpbch:Characteristics' and
+            // dereferences setpointValue.$type, so flat/untyped output is dropped
+            // (or crashes) on re-import.
+            c["$type"] = "fpbch:Characteristics";
+
             var cIdent = cAttr.Attribute["Category"];
             if (cIdent != null)
             {
                 c["category"] = new Dictionary<string, object>
                 {
+                    ["$type"] = "fpb:Identification",
                     ["uniqueIdent"] = cIdent.Attribute["uniqueIdent"]?.Value ?? "",
                     ["longName"] = cIdent.Attribute["longName"]?.Value ?? "",
                     ["shortName"] = cIdent.Attribute["shortName"]?.Value ?? "",
@@ -616,14 +623,16 @@ public static class CaexToFpbJson
             var desc = cAttr.Attribute["DescriptiveElement"];
             if (desc != null)
             {
-                c["descriptiveElement"] = new Dictionary<string, object>
+                var descDict = new Dictionary<string, object>
                 {
+                    ["$type"] = "fpbch:DescriptiveElement",
                     ["valueDeterminationProcess"] = desc.Attribute["valueDeterminationProcess"]?.Value ?? "",
                     ["representivity"] = desc.Attribute["representivity"]?.Value ?? "",
-                    ["setpointValue"] = desc.Attribute["setpointValue"]?.Value ?? "",
-                    ["validityLimits"] = desc.Attribute["validityLimits"]?.Value ?? "",
-                    ["actualValues"] = desc.Attribute["actualValues"]?.Value ?? "",
+                    ["setpointValue"] = ReadValueWithUnit(desc.Attribute["setpointValue"]),
+                    ["validityLimits"] = ReadValidityLimits(desc.Attribute["validityLimits"]),
+                    ["actualValues"] = ReadActualValues(desc.Attribute["actualValues"]),
                 };
+                c["descriptiveElement"] = descDict;
             }
 
             var rel = cAttr.Attribute["RelationalElement"];
@@ -631,6 +640,7 @@ public static class CaexToFpbJson
             {
                 c["relationalElement"] = new Dictionary<string, object>
                 {
+                    ["$type"] = "fpbch:RelationalElement",
                     ["view"] = rel.Attribute["view"]?.Value ?? "",
                     ["model"] = rel.Attribute["model"]?.Value ?? "",
                     ["regulationsForRelationalGeneration"] = rel.Attribute["regulationsForRelationalGeneration"]?.Value ?? "",
@@ -641,6 +651,45 @@ public static class CaexToFpbJson
         }
 
         return characteristics;
+    }
+
+    // setpointValue compound {value, unit} → {$type, value, unit}. Tolerates a
+    // missing/legacy-flat attribute (returns an empty value object) so FPB.JS'
+    // setpointValue.$type dereference never hits undefined.
+    private static Dictionary<string, object> ReadValueWithUnit(AttributeType? attr) => new()
+    {
+        ["$type"] = "fpbch:ValueWithUnit",
+        ["value"] = attr?.Attribute["value"]?.Value ?? "",
+        ["unit"] = attr?.Attribute["unit"]?.Value ?? "",
+    };
+
+    private static List<object> ReadValidityLimits(AttributeType? attr)
+    {
+        var list = new List<object>();
+        if (attr == null) return list;
+        foreach (var lim in attr.Attribute.Where(a => a.Name != null && a.Name.StartsWith("validityLimit", StringComparison.Ordinal)))
+            list.Add(new Dictionary<string, object>
+            {
+                ["$type"] = "fpbch:ValidityLimits",
+                ["limitType"] = lim.Attribute["limitType"]?.Value ?? "",
+                ["from"] = lim.Attribute["from"]?.Value ?? "",
+                ["to"] = lim.Attribute["to"]?.Value ?? "",
+            });
+        return list;
+    }
+
+    private static List<object> ReadActualValues(AttributeType? attr)
+    {
+        var list = new List<object>();
+        if (attr == null) return list;
+        foreach (var av in attr.Attribute.Where(a => a.Name != null && a.Name.StartsWith("actualValue", StringComparison.Ordinal)))
+            list.Add(new Dictionary<string, object>
+            {
+                ["$type"] = "fpbch:ValueWithUnit",
+                ["value"] = av.Attribute["value"]?.Value ?? "",
+                ["unit"] = av.Attribute["unit"]?.Value ?? "",
+            });
+        return list;
     }
 
     private static Dictionary<string, object>? ParseViewInformation(InternalElementType ie)

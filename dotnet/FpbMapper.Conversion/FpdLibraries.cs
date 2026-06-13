@@ -151,9 +151,25 @@ public static class FpdLibraries
         foreach (var f in IdentFields)
             AddAttr(cIdent, f, "xs:string");
 
+        // DescriptiveElement per VDI 3682 Blatt 2 Bild 6. setpointValue is a
+        // value/unit compound; validityLimits/actualValues hold indexed children
+        // (validityLimit_N / actualValue_N) added per instance — the templates here
+        // document the child shape.
         var desc = AddAttr(charac, "DescriptiveElement", "xs:string");
-        foreach (var f in new[] { "valueDeterminationProcess", "representivity", "setpointValue", "validityLimits", "actualValues" })
-            AddAttr(desc, f, "xs:string");
+        AddAttr(desc, "valueDeterminationProcess", "xs:string");
+        AddAttr(desc, "representivity", "xs:string");
+        var setpoint = AddAttr(desc, "setpointValue", "xs:string");
+        AddAttr(setpoint, "value", "xs:string");
+        AddAttr(setpoint, "unit", "xs:string");
+        var validity = AddAttr(desc, "validityLimits", "xs:string");
+        var validityTpl = AddAttr(validity, "validityLimit", "xs:string");
+        AddAttr(validityTpl, "limitType", "xs:string");
+        AddAttr(validityTpl, "from", "xs:double");
+        AddAttr(validityTpl, "to", "xs:double");
+        var actual = AddAttr(desc, "actualValues", "xs:string");
+        var actualTpl = AddAttr(actual, "actualValue", "xs:string");
+        AddAttr(actualTpl, "value", "xs:string");
+        AddAttr(actualTpl, "unit", "xs:string");
 
         var rel = AddAttr(charac, "RelationalElement", "xs:string");
         foreach (var f in new[] { "view", "model", "regulationsForRelationalGeneration" })

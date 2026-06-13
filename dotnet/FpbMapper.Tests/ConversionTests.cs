@@ -161,6 +161,65 @@ public class RoundtripTests
         File.ReadAllText(Path.Combine("TestData", name));
 
     [Fact]
+    public void JsonToAml_PreservesCharacteristicValues()
+    {
+        // Regression: setpointValue/validityLimits/actualValues were modelled as
+        // strings and silently dropped (object/array != JSON string). The
+        // "Eingangstemperatur" characteristic carries setpoint 20 °C.
+        var doc = FpbJsonToCaex.Convert(LoadTestData("Temperieren.json")).Value!;
+
+        AttributeType? setpoint = null;
+        void Walk(IEnumerable<InternalElementType> ies)
+        {
+            foreach (var ie in ies)
+            {
+                foreach (var a in ie.Attribute) setpoint ??= FindSetpoint(a);
+                Walk(ie.InternalElement);
+            }
+        }
+        AttributeType? FindSetpoint(AttributeType a)
+        {
+            if (a.Name == "setpointValue" && (a.Attribute["value"]?.Value ?? "") != "") return a;
+            foreach (var sub in a.Attribute) { var r = FindSetpoint(sub); if (r != null) return r; }
+            return null;
+        }
+        foreach (var ih in doc.CAEXFile.InstanceHierarchy) Walk(ih.InternalElement);
+
+        Assert.NotNull(setpoint);
+        Assert.Equal("20", setpoint!.Attribute["value"]!.Value);
+        Assert.Equal("°C", setpoint.Attribute["unit"]!.Value);
+    }
+
+    [Fact]
+    public void Roundtrip_PreservesCharacteristicSetpointAndType()
+    {
+        // JSON -> AML -> JSON must keep the setpoint value AND emit the $type tags
+        // FPB.JS' importer requires (otherwise the characteristic is skipped/crashes).
+        var aml = FpbJsonToCaex.Convert(LoadTestData("Temperieren.json")).Value!;
+        var json = CaexToFpbJson.Convert(aml).Value!;
+        using var rt = JsonDocument.Parse(json);
+
+        JsonElement? setpoint = null;
+        void Scan(JsonElement el)
+        {
+            if (el.ValueKind == JsonValueKind.Object)
+            {
+                if (el.TryGetProperty("setpointValue", out var sp) && sp.ValueKind == JsonValueKind.Object
+                    && sp.TryGetProperty("value", out var v) && v.GetString() == "20")
+                    setpoint = sp;
+                foreach (var p in el.EnumerateObject()) Scan(p.Value);
+            }
+            else if (el.ValueKind == JsonValueKind.Array)
+                foreach (var i in el.EnumerateArray()) Scan(i);
+        }
+        Scan(rt.RootElement);
+
+        Assert.True(setpoint.HasValue, "setpointValue with value '20' not found after roundtrip");
+        Assert.Equal("fpbch:ValueWithUnit", setpoint!.Value.GetProperty("$type").GetString());
+        Assert.Equal("°C", setpoint.Value.GetProperty("unit").GetString());
+    }
+
+    [Fact]
     public void Roundtrip_JsonToAmlToJson_PreservesStructure()
     {
         var originalJson = LoadTestData("Temperieren.json");
@@ -1404,10 +1463,22 @@ public class IdempotentCharacteristicsTests
         var doc = FpbJsonToCaex.Convert(LoadTestData("Temperieren.json")).Value;
         var midJson = CaexToFpbJson.Convert(doc).Value;
 
-        // Strip every "characteristics" array down to []. Cheap textual edit
-        // — fine here because we only care that the down-stream side honours it.
-        var wiped = System.Text.RegularExpressions.Regex.Replace(midJson,
-            "\"characteristics\"\\s*:\\s*\\[[^\\]]*\\]", "\"characteristics\":[]");
+        // Set every "characteristics" property to []. Structural edit (the values
+        // now contain nested arrays, so a flat regex would corrupt the JSON).
+        var root = System.Text.Json.Nodes.JsonNode.Parse(midJson)!;
+        void WipeChars(System.Text.Json.Nodes.JsonNode? node)
+        {
+            if (node is System.Text.Json.Nodes.JsonObject obj)
+            {
+                foreach (var key in obj.Select(kv => kv.Key).ToList())
+                    if (key == "characteristics") obj[key] = new System.Text.Json.Nodes.JsonArray();
+                    else WipeChars(obj[key]);
+            }
+            else if (node is System.Text.Json.Nodes.JsonArray arr)
+                foreach (var item in arr) WipeChars(item);
+        }
+        WipeChars(root);
+        var wiped = root.ToJsonString();
 
         FpbJsonToCaex.UpdateInPlace(doc, wiped);
 

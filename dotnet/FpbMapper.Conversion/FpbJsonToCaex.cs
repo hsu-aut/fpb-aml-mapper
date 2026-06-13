@@ -1720,9 +1720,37 @@ public static class FpbJsonToCaex
             descAttr.AttributeDataType = "xs:string";
             AddStringSubAttr(descAttr, "valueDeterminationProcess", desc?.ValueDeterminationProcess);
             AddStringSubAttr(descAttr, "representivity", desc?.Representivity);
-            AddStringSubAttr(descAttr, "setpointValue", desc?.SetpointValue);
-            AddStringSubAttr(descAttr, "validityLimits", desc?.ValidityLimits);
-            AddStringSubAttr(descAttr, "actualValues", desc?.ActualValues);
+
+            // Sollwert (Bild 6): value/unit compound — replaces the lossy flat string.
+            var setpointAttr = descAttr.Attribute.Append("setpointValue");
+            setpointAttr.AttributeDataType = "xs:string";
+            AddStringSubAttr(setpointAttr, "value", desc?.SetpointValue?.Value);
+            AddStringSubAttr(setpointAttr, "unit", desc?.SetpointValue?.Unit);
+
+            // Gültigkeitsgrenzen (Bild 6): indexed children validityLimit_N {limitType, from, to}.
+            var validityAttr = descAttr.Attribute.Append("validityLimits");
+            validityAttr.AttributeDataType = "xs:string";
+            for (int v = 0; v < (desc?.ValidityLimits.Count ?? 0); v++)
+            {
+                var lim = desc!.ValidityLimits[v];
+                var limAttr = validityAttr.Attribute.Append($"validityLimit_{v + 1}");
+                limAttr.AttributeDataType = "xs:string";
+                AddStringSubAttr(limAttr, "limitType", lim.LimitType);
+                AddStringSubAttr(limAttr, "from", lim.From);
+                AddStringSubAttr(limAttr, "to", lim.To);
+            }
+
+            // Istwerte (Bild 6): indexed children actualValue_N {value, unit}.
+            var actualAttr = descAttr.Attribute.Append("actualValues");
+            actualAttr.AttributeDataType = "xs:string";
+            for (int v = 0; v < (desc?.ActualValues.Count ?? 0); v++)
+            {
+                var av = desc!.ActualValues[v];
+                var avAttr = actualAttr.Attribute.Append($"actualValue_{v + 1}");
+                avAttr.AttributeDataType = "xs:string";
+                AddStringSubAttr(avAttr, "value", av.Value);
+                AddStringSubAttr(avAttr, "unit", av.Unit);
+            }
 
             var rel = c.RelationalElement;
             var relAttr = cAttr.Attribute.Append("RelationalElement");

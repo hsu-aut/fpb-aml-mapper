@@ -82,9 +82,25 @@ public class DescriptiveElement
 {
     public string ValueDeterminationProcess { get; set; } = "";
     public string Representivity { get; set; } = "";
-    public string SetpointValue { get; set; } = "";
-    public string ValidityLimits { get; set; } = "";
-    public string ActualValues { get; set; } = "";
+    // Structured per VDI 3682 Blatt 2 Bild 6. FPB.JS emits setpointValue as an
+    // object {value, unit} and validityLimits/actualValues as arrays — the former
+    // string fields silently dropped those (object/array != JSON string).
+    public ValueWithUnit? SetpointValue { get; set; }
+    public List<ValidityLimit> ValidityLimits { get; set; } = new();
+    public List<ValueWithUnit> ActualValues { get; set; } = new();
+}
+
+public class ValueWithUnit
+{
+    public string Value { get; set; } = "";
+    public string Unit { get; set; } = "";
+}
+
+public class ValidityLimit
+{
+    public string LimitType { get; set; } = "";
+    public string From { get; set; } = "";
+    public string To { get; set; } = "";
 }
 
 public class RelationalElement
@@ -243,9 +259,9 @@ public static class FpbJsonParser
             {
                 ValueDeterminationProcess = descEl.GetStringProp("valueDeterminationProcess"),
                 Representivity = descEl.GetStringProp("representivity"),
-                SetpointValue = descEl.GetStringProp("setpointValue"),
-                ValidityLimits = descEl.GetStringProp("validityLimits"),
-                ActualValues = descEl.GetStringProp("actualValues"),
+                SetpointValue = ParseValueWithUnit(descEl, "setpointValue"),
+                ValidityLimits = ParseValidityLimits(descEl, "validityLimits"),
+                ActualValues = ParseValueWithUnitList(descEl, "actualValues"),
             };
         }
 
@@ -260,6 +276,37 @@ public static class FpbJsonParser
         }
 
         return c;
+    }
+
+    private static ValueWithUnit? ParseValueWithUnit(JsonElement parent, string name)
+    {
+        if (!parent.TryGetProperty(name, out var v) || v.ValueKind != JsonValueKind.Object) return null;
+        return new ValueWithUnit { Value = v.GetScalarAsString("value"), Unit = v.GetStringProp("unit") };
+    }
+
+    private static List<ValueWithUnit> ParseValueWithUnitList(JsonElement parent, string name)
+    {
+        var list = new List<ValueWithUnit>();
+        if (!parent.TryGetProperty(name, out var arr) || arr.ValueKind != JsonValueKind.Array) return list;
+        foreach (var v in arr.EnumerateArray())
+            if (v.ValueKind == JsonValueKind.Object)
+                list.Add(new ValueWithUnit { Value = v.GetScalarAsString("value"), Unit = v.GetStringProp("unit") });
+        return list;
+    }
+
+    private static List<ValidityLimit> ParseValidityLimits(JsonElement parent, string name)
+    {
+        var list = new List<ValidityLimit>();
+        if (!parent.TryGetProperty(name, out var arr) || arr.ValueKind != JsonValueKind.Array) return list;
+        foreach (var v in arr.EnumerateArray())
+            if (v.ValueKind == JsonValueKind.Object)
+                list.Add(new ValidityLimit
+                {
+                    LimitType = v.GetStringProp("limitType"),
+                    From = v.GetScalarAsString("from"),
+                    To = v.GetScalarAsString("to"),
+                });
+        return list;
     }
 
     private static VisualInfo ParseVisualInfo(JsonElement el)
@@ -304,6 +351,21 @@ public static class FpbJsonParser
         if (el.TryGetProperty(name, out var val) && val.ValueKind == JsonValueKind.String)
             return val.GetString() ?? "";
         return "";
+    }
+
+    /// <summary>Reads a scalar that may be a JSON string OR a number, as its text.
+    /// Characteristic values arrive both ways (setpoint value="20" as string, validity from=0 as number).</summary>
+    private static string GetScalarAsString(this JsonElement el, string name)
+    {
+        if (!el.TryGetProperty(name, out var val)) return "";
+        return val.ValueKind switch
+        {
+            JsonValueKind.String => val.GetString() ?? "",
+            JsonValueKind.Number => val.GetRawText(),
+            JsonValueKind.True => "true",
+            JsonValueKind.False => "false",
+            _ => "",
+        };
     }
 
     private static string? GetStringPropOrNull(this JsonElement el, string name)
