@@ -79,7 +79,7 @@ context FPD_ProcessOperator inv ProcessOperatorHasIO:
   self.incomingConnections->select(c | c.oclIsKindOf(FPD_Flow))->size() >= 1 and self.outgoingConnections->select(c | c.oclIsKindOf(FPD_Flow))->size() >= 1
 
 context FPD_State inv StateHasConcreteType:
-  self.oclIsKindOf(FPD_Product) xor self.oclIsKindOf(FPD_Energy) xor self.oclIsKindOf(FPD_Information)
+  Sequence{FPD_Product, FPD_Energy, FPD_Information}->select(t | self.oclIsKindOf(t))->size() = 1
 
 context FPD_Connection inv NoSelfReference:
   (self.source->notEmpty() and self.target->notEmpty()) implies self.source <> self.target
