@@ -108,7 +108,10 @@ public static class FpbMappings
     public static class AmlBase
     {
         public const string Alias = "AutomationMLBaseLibrariesAMLEd22_11_0";
-        public const string Path  = "https://9t4kqL7NX8JsW6o@automationml.ovgu.de/public.php/webdav/AutomationML_Base_Libraries_AMLEd2_2.11.0.aml";
+        // Relative reference — AML-conforming tools resolve this through their
+        // configured library search path. A public mirror under fpbjs.net/libs
+        // is planned (see roadmap) for hosting an immutable copy.
+        public const string Path  = "AutomationML_Base_Libraries_AMLEd2_2.11.0.aml";
 
         // InterfaceClassLib base
         public const string Port      = Alias + "@AutomationMLInterfaceClassLib/AutomationMLBaseInterface/Port";
