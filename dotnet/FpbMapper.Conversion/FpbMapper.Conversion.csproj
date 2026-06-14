@@ -7,4 +7,17 @@
   <ItemGroup>
     <PackageReference Include="Aml.Engine" Version="4.*" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- FPD validation rule set as OCL spec files. Embedded so any consumer
+         (Plugin, Web backend, CI) ships with the exact same constraints. -->
+    <EmbeddedResource Include="Rules\vdi3682-pure-rules.ocl">
+      <LogicalName>FpbMapper.Conversion.Rules.vdi3682-pure-rules.ocl</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Rules\vdi3682-helpers.ocl">
+      <LogicalName>FpbMapper.Conversion.Rules.vdi3682-helpers.ocl</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Rules\vdi3682-phase2-rules.ocl">
+      <LogicalName>FpbMapper.Conversion.Rules.vdi3682-phase2-rules.ocl</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
 </Project>

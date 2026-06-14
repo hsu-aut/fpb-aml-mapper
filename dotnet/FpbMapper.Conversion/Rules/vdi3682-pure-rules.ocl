@@ -1,0 +1,91 @@
+-- FPD validation rule set — Phase 1 (PURE), executable by OCL.NET.
+-- The 26 structural constraints that map directly to OCL over the FPD model AND
+-- are executable against the CAEX serialization today (cardinalities, connection
+-- typing, naming, reference resolution, semantics).
+-- Informed by VDI 3682 Parts 1 and 2 plus tool-level conventions for the AML
+-- serialization. This is an implementation profile, not a normative document.
+-- Geometry (B) and schema-resolution (J) rules ship separately; see
+-- vdi3682-helpers.ocl for the def: library. The four FPD_Characteristic rules
+-- (E1/E2/E4/E5) live in vdi3682-phase2-rules.ocl until the binding exposes
+-- characteristics as OCL instances — shipping them here would make them
+-- silently-green dead rules.
+
+context FPD_Project inv ProjectMinimumProcess:
+  self.process->size() >= 1
+
+context FPD_Process inv SystemLimitCardinality:
+  self.containedElement->select(e | e.oclIsKindOf(FPD_SystemLimit))->size() = 1
+
+context FPD_Process inv StateMinimumCardinality:
+  self.containedElement->select(e | e.oclIsKindOf(FPD_State))->size() >= 2
+
+context FPD_Process inv ProcessOperatorMinimumCardinality:
+  self.containedElement->select(e | e.oclIsKindOf(FPD_ProcessOperator))->size() >= 1
+
+context FPD_Flow inv FlowEndpointsTyped:
+  (source.oclIsKindOf(FPD_State) and target.oclIsKindOf(FPD_ProcessOperator)) or
+  (source.oclIsKindOf(FPD_ProcessOperator) and target.oclIsKindOf(FPD_State))
+
+context FPD_Flow inv NoStateToStateFlow:
+  not (source.oclIsKindOf(FPD_State) and target.oclIsKindOf(FPD_State))
+
+context FPD_Flow inv NoProcessOperatorToProcessOperatorFlow:
+  not (source.oclIsKindOf(FPD_ProcessOperator) and target.oclIsKindOf(FPD_ProcessOperator))
+
+context FPD_Usage inv UsageEndpointsTyped:
+  (source.oclIsKindOf(FPD_ProcessOperator) and target.oclIsKindOf(FPD_TechnicalResource)) or
+  (source.oclIsKindOf(FPD_TechnicalResource) and target.oclIsKindOf(FPD_ProcessOperator))
+
+context FPD_Process inv NoDuplicateConnections:
+  self.connections->forAll(c1, c2 | (c1 <> c2 and c1.source = c2.source and c1.target = c2.target) implies c1.oclType() <> c2.oclType())
+
+context FPD_Flow inv FlowDirected:
+  self.sourceInterface.oclIsKindOf(FPD_FlowOut) and self.targetInterface.oclIsKindOf(FPD_FlowIn)
+
+context FPD_ProcessOperator inv NoMixedFlowTypes:
+  let outFlows = self.outgoingConnections->select(c | c.oclIsKindOf(FPD_Flow)) in outFlows->forAll(f1, f2 | f1.oclType() = f2.oclType())
+
+context FPD_Project inv UniqueIdentifiers:
+  let allElements = self.process.containedElement->asSet() in allElements->forAll(e1, e2 | (e1 <> e2 and e1.identification.uniqueIdent->notEmpty() and e1.refObj <> e2.identification.uniqueIdent and e2.refObj <> e1.identification.uniqueIdent) implies e1.identification.uniqueIdent <> e2.identification.uniqueIdent)
+
+context FPD_ProcessOperator inv ProcessOperatorNamed:
+  (self.identification.longName->notEmpty() and self.identification.longName.size() > 0) or (self.identification.shortName->notEmpty() and self.identification.shortName.size() > 0) or (self.name->notEmpty())
+
+context FPD_State inv StateNamed:
+  self.identification.longName->notEmpty() or self.identification.shortName->notEmpty() or self.name->notEmpty()
+
+context FPD_TechnicalResource inv TechnicalResourceNamed:
+  self.identification.longName->notEmpty() or self.identification.shortName->notEmpty() or self.name->notEmpty()
+
+context FPD_Process inv ProcessNamed:
+  self.name->notEmpty()
+
+context FPD_Object inv LongNameMandatory:
+  self.identification.longName->notEmpty() and self.identification.longName.size() > 0
+
+context FPD_Object inv VersionRevisionPresent:
+  self.identification.versionNumber->size() = 1 and self.identification.revisionNumber->size() = 1
+
+context FPD_Object inv RefObjResolvable:
+  self.refObj->notEmpty() implies self.project.containedElement->exists(e | e.identification.uniqueIdent = self.refObj)
+
+context FPD_ProcessOperator inv RefProcessResolvable:
+  self.refProcess->notEmpty() implies self.project.process->exists(p | p.id = self.refProcess)
+
+context FPD_Object inv AllReferencesResolvable:
+  Sequence{self.refObj, self.refBaseObj, self.refExtendedObj, self.refComposedObj}->select(r | r->notEmpty())->forAll(r | self.project.containedElement->exists(e | e.identification.uniqueIdent = r))
+
+context FPD_ProcessOperator inv ProcessOperatorHasIO:
+  self.incomingConnections->select(c | c.oclIsKindOf(FPD_Flow))->size() >= 1 and self.outgoingConnections->select(c | c.oclIsKindOf(FPD_Flow))->size() >= 1
+
+context FPD_State inv StateHasConcreteType:
+  self.oclIsKindOf(FPD_Product) xor self.oclIsKindOf(FPD_Energy) xor self.oclIsKindOf(FPD_Information)
+
+context FPD_Connection inv NoSelfReference:
+  (self.source->notEmpty() and self.target->notEmpty()) implies self.source <> self.target
+
+context FPD_Object inv NoOrphanedElements:
+  (self.oclIsKindOf(FPD_State) or self.oclIsKindOf(FPD_ProcessOperator) or self.oclIsKindOf(FPD_TechnicalResource)) implies (self.incomingConnections->notEmpty() or self.outgoingConnections->notEmpty())
+
+context FPD_Connection inv SourceTargetSameProcess:
+  (self.source->notEmpty() and self.target->notEmpty()) implies self.source.process = self.target.process

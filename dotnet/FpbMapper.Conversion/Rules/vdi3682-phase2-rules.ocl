@@ -1,0 +1,20 @@
+-- FPD validation — Phase-2 rules: FPD_Characteristic constraints (E1/E2/E4/E5).
+--
+-- Linguistically these are PURE OCL, but they are NOT yet executable against the
+-- CAEX serialization: the binding does not expose characteristics as enumerable
+-- OCL instances (FPD_Characteristic is unknown to the type registry). Running them
+-- today would yield a vacuous pass — the engine instead reports "context type
+-- unknown to the model binding" as a diagnostic. They move into
+-- vdi3682-pure-rules.ocl once the characteristic binding lands.
+
+context FPD_Characteristic inv CharacteristicCategoryPresent:
+  self.category->notEmpty()
+
+context FPD_Characteristic inv CharacteristicDescriptivePresent:
+  self.descriptiveElement->notEmpty()
+
+context FPD_Characteristic::RelationalElement inv RelationalElementResolvable:
+  self.references->forAll(ref | self.project.containedElement->exists(e | e.identification.uniqueIdent = ref))
+
+context FPD_Characteristic::DescriptiveElement inv ValidityLimitsConsistent:
+  self.validityLimits->notEmpty() implies self.validityLimits.lowerLimit <= self.validityLimits.upperLimit

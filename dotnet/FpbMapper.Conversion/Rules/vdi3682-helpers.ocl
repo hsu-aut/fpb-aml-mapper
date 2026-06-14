@@ -1,0 +1,38 @@
+-- FPD validation — OCL helper operations (standard library)
+--
+-- The rule set's spatial rules (category B) use geometric predicates such as
+-- bounds.isWithin(...) / overlapsWith(...) / isOnBorderOf(...). They are defined
+-- here as plain OCL `def:` operations so the rule set stays self-contained and
+-- tool-independent. An OCL engine loads this file alongside the rules; a host
+-- may override individual operations with a native implementation for
+-- performance (the result must be identical).
+--
+-- Bounds is the conceptual axis-aligned box with Real attributes x, y, width,
+-- height (origin top-left, y growing downwards).
+
+context Bounds
+def: right(): Real = self.x + self.width
+
+context Bounds
+def: bottom(): Real = self.y + self.height
+
+context Bounds
+def: isWithin(other: Bounds): Boolean =
+  self.x >= other.x and
+  self.y >= other.y and
+  self.x + self.width <= other.x + other.width and
+  self.y + self.height <= other.y + other.height
+
+context Bounds
+def: overlapsWith(other: Bounds): Boolean =
+  self.x < other.x + other.width and
+  self.x + self.width > other.x and
+  self.y < other.y + other.height and
+  self.y + self.height > other.y
+
+context Bounds
+def: isOnBorderOf(other: Bounds): Boolean =
+  self.x = other.x or
+  self.x + self.width = other.x + other.width or
+  self.y = other.y or
+  self.y + self.height = other.y + other.height
