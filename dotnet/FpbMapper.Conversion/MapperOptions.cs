@@ -19,36 +19,71 @@ public sealed class MapperOptions
     public static readonly MapperOptions Default = new();
 
     /// <summary>
-    /// When false (default), the FPD library defines its own <c>refObj</c>
-    /// AttributeType under <c>VDI_FPD_AttributeTypeLib</c>.
+    /// When true (default since library version 1.1.0), the FPD library types
+    /// its three reference attributes with the official
+    /// <c>AutomationML_ObjectReferences_AttributeTypeLib</c> (AutomationML e.V.,
+    /// v1.1.1-beta) instead of a locally declared generic <c>refObj</c>:
+    /// <list type="bullet">
+    ///   <item><c>refProcess</c> on a process operator → <c>refDetailObj</c>
+    ///         (the sub-process is the more detailed representation)</item>
+    ///   <item><c>refObj</c> on a sub-process → <c>refAbstractObj</c>
+    ///         (reverse direction, back to the operator)</item>
+    ///   <item><c>refObj</c> on a boundary state → <c>refBaseObj</c>
+    ///         (same logical object as the top-level state)</item>
+    /// </list>
+    /// The attribute NAMES stay <c>refObj</c> / <c>refProcess</c>; only the
+    /// RefAttributeType changes. The official library is pulled in through an
+    /// ExternalReference (alias <see cref="ObjectReferencesLibrary.Alias"/>),
+    /// it is not embedded.
     ///
-    /// When true, the mapper expects to find the broader Object-References
-    /// framework from the ETFA 2026 paper (refObj, refBaseObj, refExtendedObj,
-    /// refComposedObj) in the central
-    /// <c>AutomationML_ObjectReferences_AttributeTypeLib</c> and references
-    /// THAT for the refObj attribute on FPD_Process instead of declaring its
-    /// own. The actual ExternalReference + library detection lands in a later
-    /// phase; this flag is the configuration anchor.
+    /// When false, the FPD library declares its own generic <c>refObj</c>
+    /// AttributeType under <c>VDI_FPD_AttributeTypeLib</c> (v0.5 layout as
+    /// published in the ETFA 2026 paper).
     /// </summary>
-    public bool UseObjectReferencesLibrary { get; init; } = false;
+    public bool UseObjectReferencesLibrary { get; init; } = true;
 
     /// <summary>
-    /// Override the AttributeTypeLib path the mapper uses when emitting the
-    /// refObj attribute on a sub-process. Leave null to use the canonical path
-    /// (VDI-internal when <see cref="UseObjectReferencesLibrary"/> is false,
-    /// central library when true).
+    /// Override the AttributeTypeLib path stamped on ALL three FPD reference
+    /// attributes. Leave null to use the canonical paths (specialised official
+    /// types when <see cref="UseObjectReferencesLibrary"/> is true, the
+    /// VDI-internal generic type when false).
     /// </summary>
     public string? RefObjAttributeTypePath { get; init; } = null;
 
-    /// <summary>
-    /// Resolve the actual path the mapper should stamp on the refObj attribute
-    /// of a FPD_Process IE, honouring the override above when set.
-    /// </summary>
+    /// <summary>Path of the generic base type (refObj) in the active layout.</summary>
     public string EffectiveRefObjAttributeTypePath
         => RefObjAttributeTypePath
            ?? (UseObjectReferencesLibrary
                ? ObjectReferencesLibrary.RefObjAttributeTypePath
                : FpbMappings.AttrRefs.RefObj);
+
+    /// <summary>Type of <c>refProcess</c> on FPD_ProcessOperator (operator → sub-process).</summary>
+    public string EffectiveRefProcessAttributeTypePath
+        => RefObjAttributeTypePath
+           ?? (UseObjectReferencesLibrary
+               ? ObjectReferencesLibrary.RefDetailObjAttributeTypePath
+               : FpbMappings.AttrRefs.RefObj);
+
+    /// <summary>Type of <c>refObj</c> on FPD_Process (sub-process → parent operator).</summary>
+    public string EffectiveSubProcessRefObjAttributeTypePath
+        => RefObjAttributeTypePath
+           ?? (UseObjectReferencesLibrary
+               ? ObjectReferencesLibrary.RefAbstractObjAttributeTypePath
+               : FpbMappings.AttrRefs.RefObj);
+
+    /// <summary>Type of <c>refObj</c> on FPD_State (boundary state → top-level original).</summary>
+    public string EffectiveBoundaryStateRefObjAttributeTypePath
+        => RefObjAttributeTypePath
+           ?? (UseObjectReferencesLibrary
+               ? ObjectReferencesLibrary.RefBaseObjAttributeTypePath
+               : FpbMappings.AttrRefs.RefObj);
+
+    /// <summary>
+    /// AttributeDataType of the reference attributes. The official library types
+    /// them as xs:IDREF; the legacy VDI-internal layout used xs:string.
+    /// </summary>
+    public string ReferenceAttributeDataType
+        => UseObjectReferencesLibrary ? "xs:IDREF" : "xs:string";
 
     /// <summary>
     /// Optional fine-grained trace callback. The mapper invokes it twice for
@@ -81,22 +116,26 @@ internal static class MapperTrace
 }
 
 /// <summary>
-/// Constants for the central
-/// <c>AutomationML_ObjectReferences_AttributeTypeLib</c> from the ETFA 2026
-/// paper. The library itself is shipped as a separate AML asset; this class
-/// holds the paths the mapper needs to reference from inside an FPD document
-/// when <see cref="MapperOptions.UseObjectReferencesLibrary"/> is enabled.
-///
-/// Phase-2 follow-up (tracked in plugin-robustness-todo): emit an
-/// ExternalReference to that asset from the FPD CAEXFile so consumers can
-/// resolve the paths without extra setup.
+/// Constants for the official
+/// <c>AutomationML_ObjectReferences_AttributeTypeLib</c> released by the
+/// AutomationML e.V. (v1.1.1-beta; the published successor of the four-type
+/// framework proposed in the ETFA 2026 paper). The library is a separate AML
+/// asset and is referenced through an ExternalReference with alias
+/// <see cref="Alias"/>; all paths below are alias-qualified accordingly.
 /// </summary>
 public static class ObjectReferencesLibrary
 {
-    public const string LibName = "AutomationML_ObjectReferences_AttributeTypeLib";
+    public const string LibName  = "AutomationML_ObjectReferences_AttributeTypeLib";
+    public const string Version  = "1.1.1-beta";
+    public const string FileName = "AutomationML_ObjectReferences_AttributeTypeLib_AMLEd2_1.1.1-beta.aml";
+    public const string Alias    = "ObjectReferences";
 
-    public const string RefObjAttributeTypePath         = LibName + "/refObj";
-    public const string RefBaseObjAttributeTypePath     = LibName + "/refBaseObj";
-    public const string RefExtendedObjAttributeTypePath = LibName + "/refExtendedObj";
-    public const string RefComposedObjAttributeTypePath = LibName + "/refComposedObj";
+    /// <summary>Alias-qualified library name as used in RefAttributeType paths.</summary>
+    public const string QualifiedLibName = Alias + "@" + LibName;
+
+    public const string RefObjAttributeTypePath         = QualifiedLibName + "/refObj";
+    public const string RefBaseObjAttributeTypePath     = QualifiedLibName + "/refBaseObj";
+    public const string RefAspectObjAttributeTypePath   = QualifiedLibName + "/refAspectObj";
+    public const string RefDetailObjAttributeTypePath   = QualifiedLibName + "/refDetailObj";
+    public const string RefAbstractObjAttributeTypePath = QualifiedLibName + "/refAbstractObj";
 }

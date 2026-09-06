@@ -33,7 +33,9 @@ public class JsonToAmlTests
         Assert.NotNull(caex.RoleClassLib[LibNames.RoleClassLib]);
         Assert.NotNull(caex.InterfaceClassLib[LibNames.InterfaceClassLib]);
         Assert.NotNull(caex.AttributeTypeLib[LibNames.AttributeTypeLib]);
-        Assert.NotNull(caex.AttributeTypeLib[LibNames.DIAttributeTypeLib]);
+        // Diagram-interchange types are external: no local DI library, but an ExternalReference to OMG_DD_AttributeTypeLib.
+        Assert.Null(caex.AttributeTypeLib[LibNames.DIAttributeTypeLib]);
+        Assert.Contains(caex.ExternalReference, e => e.Alias == DiagramInterchangeLibrary.Alias);
     }
 
     [Fact]
@@ -652,19 +654,29 @@ public class UpdateInPlaceEditTests
         var aml = FreshAml();
         var rt = RoundtripJson(aml);
 
-        // Drop the first fpb:Energy element from the payload.
+        // Drop the first fpb:Energy element from the payload. A boundary state
+        // shares ONE id across the parent + sub-process layer, so deleting it in
+        // FPB.JS removes it from EVERY layer — mirror that by stripping the id from
+        // all entries. (Removing it from a single layer only would legitimately
+        // leave the other layer's copy behind, which is a different scenario.)
         string? targetId = null;
         var modified = MutateJson(rt, root =>
         {
             var data = root[1]!["elementDataInformation"]!.AsArray();
-            for (int i = 0; i < data.Count; i++)
+            foreach (var d in data)
             {
-                if (data[i]!["$type"]!.GetValue<string>() == "fpb:Energy")
+                if (d!["$type"]!.GetValue<string>() == "fpb:Energy")
                 {
-                    targetId = data[i]!["id"]!.GetValue<string>();
-                    data.RemoveAt(i);
-                    return;
+                    targetId = d["id"]!.GetValue<string>();
+                    break;
                 }
+            }
+            if (targetId == null) return;
+            for (int e = 1; e < root.Count; e++)
+            {
+                if (root[e]?["elementDataInformation"] is not JsonArray arr) continue;
+                for (int i = arr.Count - 1; i >= 0; i--)
+                    if (arr[i]?["id"]?.GetValue<string>() == targetId) arr.RemoveAt(i);
             }
         });
         Assert.NotNull(targetId);
@@ -891,6 +903,173 @@ public class UpdateInPlaceEditTests
             FpbJsonToCaex.UpdateInPlace(aml, rt);
         Assert.Equal(beforeCount, CountAllIes(ih));
     }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Regression tests for the Spaghetti-AML bug:
+    //
+    //   When the FPB.JS-side decomposes a PO, the Sub-Process inherits
+    //   boundary-states whose FPB.JS-id == the Top-Level state's id
+    //   (ID-sharing convention). On the AML side these MUST be separate
+    //   IEs with their own AML-IDs and refObj pointing to the Top-Level
+    //   state (per EKA paper §3.2 + ETFA paper §3.4).
+    //
+    //   The legacy UpdateInPlace implementation removed the Sub-Process
+    //   boundary IEs as orphans (their AML-IDs aren't in the incoming
+    //   FPB.JS snapshot), then on the next sync wrote the boundary-state
+    //   ViewInformation back onto the Top-Level IE — silently corrupting
+    //   the parent model.
+    // ─────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void UpdateInPlace_PreservesSubProcessBoundaryStates_AcrossIdempotentSync()
+    {
+        var aml = FreshAml();
+        var ih = aml.CAEXFile.InstanceHierarchy.First();
+
+        // Snapshot: count every Sub-Process boundary IE (state IE whose refObj
+        // points to a Top-Level state with the same semantic identity).
+        var beforeBoundaryIds = CollectSubProcessBoundaryIds(ih);
+        Assert.True(beforeBoundaryIds.Count > 0,
+            "Temperieren.json should produce at least one Sub-Process boundary IE — test premise violated.");
+
+        var rt = RoundtripJson(aml);
+        FpbJsonToCaex.UpdateInPlace(aml, rt);
+
+        var afterBoundaryIds = CollectSubProcessBoundaryIds(ih);
+        Assert.Equal(beforeBoundaryIds.Count, afterBoundaryIds.Count);
+    }
+
+    [Fact]
+    public void UpdateInPlace_TopLevelStates_RefObjStaysEmpty()
+    {
+        var aml = FreshAml();
+        var ih = aml.CAEXFile.InstanceHierarchy.First();
+        var rt = RoundtripJson(aml);
+        FpbJsonToCaex.UpdateInPlace(aml, rt);
+
+        // Top-level states (those in a Process whose own refObj is empty)
+        // must NEVER carry a refObj — they are the originals, not boundaries.
+        var selfReferences = WalkAll(ih.InternalElement)
+            .Where(IsTopLevelState)
+            .Where(ie => !string.IsNullOrEmpty(ie.Attribute["refObj"]?.Value))
+            .Select(ie => $"{ie.Name} ({ie.ID}) refObj={ie.Attribute["refObj"]?.Value}")
+            .ToList();
+
+        Assert.True(selfReferences.Count == 0,
+            "Top-level states must have empty refObj. Found: " + string.Join(", ", selfReferences));
+    }
+
+    [Fact]
+    public void UpdateInPlace_TopLevelStatePositions_StayStable()
+    {
+        var aml = FreshAml();
+        var ih = aml.CAEXFile.InstanceHierarchy.First();
+
+        // Snapshot positions for every top-level state.
+        var before = WalkAll(ih.InternalElement)
+            .Where(IsTopLevelState)
+            .ToDictionary(ie => ie.ID, ie => ReadPosition(ie));
+
+        var rt = RoundtripJson(aml);
+        FpbJsonToCaex.UpdateInPlace(aml, rt);
+
+        var after = WalkAll(ih.InternalElement)
+            .Where(IsTopLevelState)
+            .ToDictionary(ie => ie.ID, ie => ReadPosition(ie));
+
+        var drift = before
+            .Where(kv => after.TryGetValue(kv.Key, out var p) && !PosEqual(kv.Value, p))
+            .Select(kv => $"{kv.Key}: ({kv.Value.x},{kv.Value.y}) -> ({after[kv.Key].x},{after[kv.Key].y})")
+            .ToList();
+
+        Assert.True(drift.Count == 0,
+            "Top-level state positions drifted across idempotent UpdateInPlace. " +
+            "This is the Spaghetti-bug: Sub-Process boundary positions overwrote Top-Level positions. " +
+            "Drift: " + string.Join("; ", drift));
+    }
+
+    [Fact]
+    public void UpdateInPlace_SubProcessBoundaryPositions_StayStable()
+    {
+        var aml = FreshAml();
+        var ih = aml.CAEXFile.InstanceHierarchy.First();
+
+        // Sub-process boundary state IEs (refObj set) carry their OWN ViewInformation,
+        // independent of the top-level original that shares their logical FPB.JS id.
+        // Before the boundary-state reunification fix a shared-id snapshot collapsed
+        // the sub copy onto the top-level one: it was orphan-removed and its position
+        // lost ("duplicate states not saved"). This guards that both survive with
+        // their own positions across an idempotent shared-id round-trip.
+        var boundaryIds = CollectSubProcessBoundaryIds(ih);
+        Assert.True(boundaryIds.Count > 0,
+            "Temperieren.json should produce Sub-Process boundary states — test premise violated.");
+
+        var before = WalkAll(ih.InternalElement)
+            .Where(ie => boundaryIds.Contains(ie.ID))
+            .ToDictionary(ie => ie.ID, ie => ReadPosition(ie));
+
+        var rt = RoundtripJson(aml);
+        FpbJsonToCaex.UpdateInPlace(aml, rt);
+
+        var after = WalkAll(ih.InternalElement)
+            .Where(ie => boundaryIds.Contains(ie.ID))
+            .ToDictionary(ie => ie.ID, ie => ReadPosition(ie));
+
+        var missing = boundaryIds.Where(id => !after.ContainsKey(id)).ToList();
+        Assert.True(missing.Count == 0,
+            "Sub-Process boundary state(s) were dropped by UpdateInPlace: " + string.Join(", ", missing));
+
+        var drift = before
+            .Where(kv => after.TryGetValue(kv.Key, out var p) && !PosEqual(kv.Value, p))
+            .Select(kv => $"{kv.Key}: ({kv.Value.x},{kv.Value.y}) -> ({after[kv.Key].x},{after[kv.Key].y})")
+            .ToList();
+        Assert.True(drift.Count == 0,
+            "Sub-Process boundary state positions drifted across UpdateInPlace: " + string.Join("; ", drift));
+    }
+
+    private static List<string> CollectSubProcessBoundaryIds(InstanceHierarchyType ih)
+    {
+        var stateSucPaths = new HashSet<string>(new[] {
+            ElementToSuc["fpb:Product"],
+            ElementToSuc["fpb:Energy"],
+            ElementToSuc["fpb:Information"],
+        });
+        return WalkAll(ih.InternalElement)
+            .Where(ie => ie.RefBaseSystemUnitPath is { } suc && stateSucPaths.Contains(suc))
+            .Where(ie => !string.IsNullOrEmpty(ie.Attribute["refObj"]?.Value))
+            .Select(ie => ie.ID)
+            .ToList();
+    }
+
+    private static bool IsTopLevelState(InternalElementType ie)
+    {
+        var stateSucPaths = new HashSet<string>(new[] {
+            ElementToSuc["fpb:Product"],
+            ElementToSuc["fpb:Energy"],
+            ElementToSuc["fpb:Information"],
+        });
+        if (ie.RefBaseSystemUnitPath is not { } suc || !stateSucPaths.Contains(suc)) return false;
+        // Top-level state = parent Process has empty refObj.
+        if (ie.CAEXParent is not InternalElementType parentProc) return false;
+        if (parentProc.RefBaseSystemUnitPath != ElementToSuc["fpb:Process"]) return false;
+        return string.IsNullOrEmpty(parentProc.Attribute["refObj"]?.Value);
+    }
+
+    private static (double x, double y) ReadPosition(InternalElementType ie)
+    {
+        var vi = ie.Attribute["ViewInformation"];
+        if (vi == null) return (0, 0);
+        var pos = vi.Attribute["position"];
+        if (pos == null) return (0, 0);
+        double.TryParse(pos.Attribute["x"]?.Value, System.Globalization.NumberStyles.Any,
+            System.Globalization.CultureInfo.InvariantCulture, out var x);
+        double.TryParse(pos.Attribute["y"]?.Value, System.Globalization.NumberStyles.Any,
+            System.Globalization.CultureInfo.InvariantCulture, out var y);
+        return (x, y);
+    }
+
+    private static bool PosEqual((double x, double y) a, (double x, double y) b) =>
+        Math.Abs(a.x - b.x) < 0.01 && Math.Abs(a.y - b.y) < 0.01;
 
     // ── helpers ───────────────────────────────────────────────────────────
 
@@ -1162,16 +1341,18 @@ public class ReferenceTypeTests
     {
         Assert.True(ReferenceTypes.RefObj.IsOrInheritsFrom(ReferenceTypes.RefObj));
         Assert.True(ReferenceTypes.RefBaseObj.IsOrInheritsFrom(ReferenceTypes.RefObj));
-        Assert.True(ReferenceTypes.RefExtendedObj.IsOrInheritsFrom(ReferenceTypes.RefObj));
-        Assert.True(ReferenceTypes.RefComposedObj.IsOrInheritsFrom(ReferenceTypes.RefObj));
+        Assert.True(ReferenceTypes.RefAspectObj.IsOrInheritsFrom(ReferenceTypes.RefObj));
+        Assert.True(ReferenceTypes.RefDetailObj.IsOrInheritsFrom(ReferenceTypes.RefObj));
+        Assert.True(ReferenceTypes.RefAbstractObj.IsOrInheritsFrom(ReferenceTypes.RefObj));
 
         // Derivatives are NOT siblings of each other.
-        Assert.False(ReferenceTypes.RefBaseObj.IsOrInheritsFrom(ReferenceTypes.RefExtendedObj));
+        Assert.False(ReferenceTypes.RefBaseObj.IsOrInheritsFrom(ReferenceTypes.RefDetailObj));
 
-        // Heterogeneous-target flags reflect the paper.
+        // Heterogeneous-target flags reflect the library descriptions.
         Assert.False(ReferenceTypes.RefBaseObj.AllowsHeterogeneousTargetType);
-        Assert.True(ReferenceTypes.RefExtendedObj.AllowsHeterogeneousTargetType);
-        Assert.True(ReferenceTypes.RefComposedObj.AllowsHeterogeneousTargetType);
+        Assert.False(ReferenceTypes.RefAspectObj.AllowsHeterogeneousTargetType);
+        Assert.True(ReferenceTypes.RefDetailObj.AllowsHeterogeneousTargetType);
+        Assert.True(ReferenceTypes.RefAbstractObj.AllowsHeterogeneousTargetType);
     }
 }
 
@@ -1527,13 +1708,13 @@ public class MappingTableExportTests
     }
 
     [Fact]
-    public void ReferenceTypeRows_ContainAllFourCanonicalTypes()
+    public void ReferenceTypeRows_ContainAllFiveOfficialTypes()
     {
         var export = MappingTableExport.Build();
-        Assert.Equal(4, export.ReferenceTypeRows.Count);
+        Assert.Equal(5, export.ReferenceTypeRows.Count);
         var refObj = export.ReferenceTypeRows.Single(r => r.AttributeName == "refObj");
         Assert.Null(refObj.Parent);
-        foreach (var derived in new[] { "refBaseObj", "refExtendedObj", "refComposedObj" })
+        foreach (var derived in new[] { "refBaseObj", "refAspectObj", "refDetailObj", "refAbstractObj" })
         {
             var row = export.ReferenceTypeRows.Single(r => r.AttributeName == derived);
             Assert.Equal("refObj", row.Parent);
@@ -1552,27 +1733,34 @@ public class MappingTableExportTests
 public class MapperOptionsTests
 {
     /// <summary>
-    /// Default options keep the v0.5.1 behaviour — refObj resolves to the
-    /// VDI-internal AttributeTypeLib path so the existing CAEX output stays
-    /// byte-identical when callers don't override anything.
+    /// Default options type the three FPD reference attributes with the
+    /// specialised types of the official ObjectReferences library.
     /// </summary>
     [Fact]
-    public void Default_RefObjPath_PointsAtVdiAttributeTypeLib()
+    public void Default_UsesOfficialObjectReferencesTypes()
     {
-        Assert.Equal(FpbMappings.AttrRefs.RefObj, MapperOptions.Default.EffectiveRefObjAttributeTypePath);
-        Assert.False(MapperOptions.Default.UseObjectReferencesLibrary);
+        var d = MapperOptions.Default;
+        Assert.True(d.UseObjectReferencesLibrary);
+        Assert.Equal(ObjectReferencesLibrary.RefObjAttributeTypePath,         d.EffectiveRefObjAttributeTypePath);
+        Assert.Equal(ObjectReferencesLibrary.RefDetailObjAttributeTypePath,   d.EffectiveRefProcessAttributeTypePath);
+        Assert.Equal(ObjectReferencesLibrary.RefAbstractObjAttributeTypePath, d.EffectiveSubProcessRefObjAttributeTypePath);
+        Assert.Equal(ObjectReferencesLibrary.RefBaseObjAttributeTypePath,     d.EffectiveBoundaryStateRefObjAttributeTypePath);
+        Assert.Equal("xs:IDREF", d.ReferenceAttributeDataType);
     }
 
     /// <summary>
-    /// Opting into the Object-References framework retargets refObj at the
-    /// central library so the same FPD documents can be produced against the
-    /// ETFA 2026 attribute hierarchy.
+    /// Opting out restores the v0.5 layout: one VDI-internal generic refObj
+    /// type for all three attributes, typed xs:string.
     /// </summary>
     [Fact]
-    public void UseObjectReferencesLibrary_RetargetsRefObjPath()
+    public void LegacyLayout_PointsAtVdiAttributeTypeLib()
     {
-        var opts = new MapperOptions { UseObjectReferencesLibrary = true };
-        Assert.Equal(ObjectReferencesLibrary.RefObjAttributeTypePath, opts.EffectiveRefObjAttributeTypePath);
+        var opts = new MapperOptions { UseObjectReferencesLibrary = false };
+        Assert.Equal(FpbMappings.AttrRefs.RefObj, opts.EffectiveRefObjAttributeTypePath);
+        Assert.Equal(FpbMappings.AttrRefs.RefObj, opts.EffectiveRefProcessAttributeTypePath);
+        Assert.Equal(FpbMappings.AttrRefs.RefObj, opts.EffectiveSubProcessRefObjAttributeTypePath);
+        Assert.Equal(FpbMappings.AttrRefs.RefObj, opts.EffectiveBoundaryStateRefObjAttributeTypePath);
+        Assert.Equal("xs:string", opts.ReferenceAttributeDataType);
     }
 
     /// <summary>An explicit override beats both default and library-flag.</summary>
@@ -1585,6 +1773,8 @@ public class MapperOptionsTests
             RefObjAttributeTypePath = "Custom/My_AttributeTypeLib/refObj",
         };
         Assert.Equal("Custom/My_AttributeTypeLib/refObj", opts.EffectiveRefObjAttributeTypePath);
+        Assert.Equal("Custom/My_AttributeTypeLib/refObj", opts.EffectiveRefProcessAttributeTypePath);
+        Assert.Equal("Custom/My_AttributeTypeLib/refObj", opts.EffectiveBoundaryStateRefObjAttributeTypePath);
     }
 }
 

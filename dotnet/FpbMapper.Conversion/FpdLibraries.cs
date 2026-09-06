@@ -11,27 +11,37 @@ namespace FpbMapper.Conversion;
 /// </summary>
 public static class FpdLibraries
 {
-    public static void EnsureLibraries(CAEXFileType caex)
+    public static void EnsureLibraries(CAEXFileType caex, MapperOptions? options = null)
     {
-        EnsureExternalReference(caex);
+        options ??= MapperOptions.Default;
+        // A document that already carries the FPD libraries keeps its layout
+        // (the Ensure* calls below are no-ops), so the ObjectReferences
+        // ExternalReference is only added when the libraries are created here.
+        var fresh = caex.SystemUnitClassLib[LibNames.SystemUnitClassLib] == null;
+        EnsureExternalReference(caex, AmlBase.Alias, AmlBase.Path);
+        if (options.UseObjectReferencesLibrary && fresh)
+            EnsureExternalReference(caex, ObjectReferencesLibrary.Alias, ObjectReferencesLibrary.FileName);
+        // Diagram-interchange types come from the shared OMG_DD_AttributeTypeLib,
+        // pulled in by ExternalReference like the ObjectReferences library.
+        if (fresh)
+            EnsureExternalReference(caex, DiagramInterchangeLibrary.Alias, DiagramInterchangeLibrary.FileName);
         EnsureInterfaceClassLib(caex);
-        EnsureRoleClassLib(caex);
-        EnsureAttributeTypeLib(caex);
-        EnsureDIAttributeTypeLib(caex);
-        EnsureSystemUnitClassLib(caex);
+        EnsureRoleClassLib(caex, options);
+        EnsureAttributeTypeLib(caex, options);
+        EnsureSystemUnitClassLib(caex, options);
     }
 
-    // -- 0. ExternalReference to AML Base Libraries ----------------------------
+    // -- 0. ExternalReferences (AML Base Libraries, ObjectReferences lib) -------
 
-    private static void EnsureExternalReference(CAEXFileType caex)
+    private static void EnsureExternalReference(CAEXFileType caex, string alias, string path)
     {
         // Check if the reference already exists
         foreach (var er in caex.ExternalReference)
-            if (er.Alias == AmlBase.Alias) return;
+            if (er.Alias == alias) return;
 
         var extRef = caex.ExternalReference.Append();
-        extRef.Alias = AmlBase.Alias;
-        extRef.Path = AmlBase.Path;
+        extRef.Alias = alias;
+        extRef.Path = path;
     }
 
     // -- 1. InterfaceClassLib ------------------------------------------------
@@ -66,7 +76,7 @@ public static class FpdLibraries
 
     // -- 2. RoleClassLib (FLAT with explicit RefBaseClassPath) ----------------
 
-    private static void EnsureRoleClassLib(CAEXFileType caex)
+    private static void EnsureRoleClassLib(CAEXFileType caex, MapperOptions options)
     {
         if (caex.RoleClassLib[LibNames.RoleClassLib] != null) return;
 
@@ -79,7 +89,8 @@ public static class FpdLibraries
         proc.Description = "Process (Part 2, Fig. 2). Aggregates states (2..*), system limit (1), and process operators (1..*).";
         proc.Version = LibNames.Version;
         proc.RefBaseClassPath = AmlBase.Structure;
-        AddRefObjAttr(proc, "IDREF to the parent process operator whose decomposition this process represents.");
+        AddRefAttr(proc, "refObj", options.EffectiveSubProcessRefObjAttributeTypePath, options,
+            "Reference to the parent process operator whose decomposition this process represents (refAbstractObj: this process is the detail representation of the operator).");
 
         // FPD_SystemLimit
         var sl = rcl.RoleClass.Append("FPD_SystemLimit");
@@ -103,7 +114,8 @@ public static class FpdLibraries
         state.Description = "Abstract state (Part 2, Fig. 2). Inherits Identification and Characteristics from FPD_Object.";
         state.Version = LibNames.Version;
         state.RefBaseClassPath = $"{LibNames.RoleClassLib}/FPD_Object";
-        AddRefObjAttr(state, "IDREF to the original state instance that this boundary state represents. Always points to the top-level original, regardless of decomposition depth.");
+        AddRefAttr(state, "refObj", options.EffectiveBoundaryStateRefObjAttributeTypePath, options,
+            "Reference to the original state instance that this boundary state represents (refBaseObj: same logical object, complementary view). Always points to the top-level original, regardless of decomposition depth.");
 
         // Concrete states (inherit FPD_State)
         foreach (var name in new[] { "FPD_Product", "FPD_Energy", "FPD_Information" })
@@ -118,7 +130,8 @@ public static class FpdLibraries
         po.Description = "Process operator (Part 2, Fig. 2). Inherits Identification and Characteristics from FPD_Object.";
         po.Version = LibNames.Version;
         po.RefBaseClassPath = $"{LibNames.RoleClassLib}/FPD_Object";
-        AddRefProcessAttr(po, "IDREF to the child process that decomposes this operator. Empty if the operator is not further decomposed.");
+        AddRefAttr(po, "refProcess", options.EffectiveRefProcessAttributeTypePath, options,
+            "Reference to the child process that decomposes this operator (refDetailObj: the child process is the more detailed representation). Empty if the operator is not further decomposed.");
 
         // FPD_TechnicalResource (inherits FPD_Object)
         var tr = rcl.RoleClass.Append("FPD_TechnicalResource");
@@ -129,7 +142,7 @@ public static class FpdLibraries
 
     // -- 3. AttributeTypeLib -------------------------------------------------
 
-    private static void EnsureAttributeTypeLib(CAEXFileType caex)
+    private static void EnsureAttributeTypeLib(CAEXFileType caex, MapperOptions options)
     {
         if (caex.AttributeTypeLib[LibNames.AttributeTypeLib] != null) return;
 
@@ -175,47 +188,20 @@ public static class FpdLibraries
         foreach (var f in new[] { "view", "model", "regulationsForRelationalGeneration" })
             AddAttr(rel, f, "xs:string");
 
-        var refObjType = atl.AttributeType.Append("refObj");
-        refObjType.AttributeDataType = "xs:string";
-        refObjType.Description = "Generic IDREF attribute. Semantics depend on the carrying element (see RoleClassLib descriptions).";
-        refObjType.Version = LibNames.Version;
+        // Legacy layout only: with the official ObjectReferences library the
+        // reference attributes are typed by that library and no local type exists.
+        if (!options.UseObjectReferencesLibrary)
+        {
+            var refObjType = atl.AttributeType.Append("refObj");
+            refObjType.AttributeDataType = "xs:string";
+            refObjType.Description = "Generic IDREF attribute. Semantics depend on the carrying element (see RoleClassLib descriptions).";
+            refObjType.Version = LibNames.Version;
+        }
     }
 
-    // -- 4. FPD_DI_AttributeTypeLib ------------------------------------------
+    // -- 4. SystemUnitClassLib (hierarchical, mirrored attributes) -----------
 
-    private static void EnsureDIAttributeTypeLib(CAEXFileType caex)
-    {
-        if (caex.AttributeTypeLib[LibNames.DIAttributeTypeLib] != null) return;
-
-        var diatl = caex.AttributeTypeLib.Append(LibNames.DIAttributeTypeLib);
-        diatl.Description = "Diagram Interchange attributes, aligned with OMG DD/DI terminology (DC::Bounds, DC::Point, DI::Waypoint).";
-        diatl.Version = LibNames.Version;
-
-        var bounds = diatl.AttributeType.Append("FPD_Bounds");
-        bounds.AttributeDataType = "xs:string";
-        bounds.Description = "A rectangular area defined by a top-left (x, y) location and a size (width, height) along the x-y axes (cf. DC::Bounds).";
-        bounds.Version = LibNames.Version;
-        AddPointAttr(bounds, "position");
-        AddAttr(bounds, "width", "xs:double");
-        AddAttr(bounds, "height", "xs:double");
-
-        var wp = diatl.AttributeType.Append("FPD_Waypoint");
-        wp.AttributeDataType = "xs:string";
-        wp.Description = "A routing point along a connection path (cf. DI::Waypoint).";
-        wp.Version = LibNames.Version;
-        AddPointAttr(wp, "position");
-
-        var pt = diatl.AttributeType.Append("FPD_Point");
-        pt.AttributeDataType = "xs:string";
-        pt.Description = "A two-dimensional point in a coordinate system (cf. DC::Point).";
-        pt.Version = LibNames.Version;
-        AddAttr(pt, "x", "xs:double");
-        AddAttr(pt, "y", "xs:double");
-    }
-
-    // -- 5. SystemUnitClassLib (hierarchical, mirrored attributes) -----------
-
-    private static void EnsureSystemUnitClassLib(CAEXFileType caex)
+    private static void EnsureSystemUnitClassLib(CAEXFileType caex, MapperOptions options)
     {
         if (caex.SystemUnitClassLib[LibNames.SystemUnitClassLib] != null) return;
 
@@ -226,7 +212,7 @@ public static class FpdLibraries
         // FPD_Process (standalone)
         var procSuc = sucl.SystemUnitClass.Append("FPD_Process");
         procSuc.Version = LibNames.Version;
-        AddRefObjAttr(procSuc, null);
+        AddRefAttr(procSuc, "refObj", options.EffectiveSubProcessRefObjAttributeTypePath, options, null);
         procSuc.SupportedRoleClass.Append().RefRoleClassPath = $"{LibNames.RoleClassLib}/FPD_Process";
         procSuc.SupportedRoleClass.Append().RefRoleClassPath = AmlBase.Structure;
 
@@ -249,7 +235,7 @@ public static class FpdLibraries
         var stateSuc = sucl.SystemUnitClass.Append("FPD_State");
         stateSuc.Version = LibNames.Version;
         stateSuc.RefBaseClassPath = $"{LibNames.SystemUnitClassLib}/FPD_Object";
-        AddRefObjAttr(stateSuc, null);
+        AddRefAttr(stateSuc, "refObj", options.EffectiveBoundaryStateRefObjAttributeTypePath, options, null);
         stateSuc.SupportedRoleClass.Append().RefRoleClassPath = $"{LibNames.RoleClassLib}/FPD_State";
 
         // Concrete states (inherit FPD_State)
@@ -268,7 +254,7 @@ public static class FpdLibraries
         var poSuc = sucl.SystemUnitClass.Append("FPD_ProcessOperator");
         poSuc.Version = LibNames.Version;
         poSuc.RefBaseClassPath = $"{LibNames.SystemUnitClassLib}/FPD_Object";
-        AddRefProcessAttr(poSuc, null);
+        AddRefAttr(poSuc, "refProcess", options.EffectiveRefProcessAttributeTypePath, options, null);
         poSuc.SupportedRoleClass.Append().RefRoleClassPath = $"{LibNames.RoleClassLib}/FPD_ProcessOperator";
         poSuc.SupportedRoleClass.Append().RefRoleClassPath = AmlBase.Process;
 
@@ -321,20 +307,17 @@ public static class FpdLibraries
             AddAttr(attr, f, "xs:string");
     }
 
-    private static void AddRefObjAttr(IObjectWithAttributes parent, string? description)
+    /// <summary>
+    /// Append one reference attribute. The attribute name is the VDI 3682 name
+    /// (refObj / refProcess); the RefAttributeType carries the semantics, either
+    /// one of the official ObjectReferences types or the legacy local refObj.
+    /// </summary>
+    private static void AddRefAttr(IObjectWithAttributes parent, string name, string attributeTypePath,
+                                   MapperOptions options, string? description)
     {
-        var attr = parent.Attribute.Append("refObj");
-        attr.AttributeDataType = "xs:string";
-        attr.RefAttributeType = AttrRefs.RefObj;
-        if (description != null)
-            attr.Description = description;
-    }
-
-    private static void AddRefProcessAttr(IObjectWithAttributes parent, string? description)
-    {
-        var attr = parent.Attribute.Append("refProcess");
-        attr.AttributeDataType = "xs:string";
-        attr.RefAttributeType = AttrRefs.RefObj;
+        var attr = parent.Attribute.Append(name);
+        attr.AttributeDataType = options.ReferenceAttributeDataType;
+        attr.RefAttributeType = attributeTypePath;
         if (description != null)
             attr.Description = description;
     }

@@ -169,7 +169,7 @@ public static class FpbJsonToCaex
         var caex = existing.CAEXFile;
 
         // Make sure FPD libraries are available (idempotent — no-op if already present).
-        FpdLibraries.EnsureLibraries(caex);
+        FpdLibraries.EnsureLibraries(caex, options);
 
         var fpdIH = targetIh ?? FindFpdInstanceHierarchy(caex);
         if (fpdIH is null)
@@ -187,6 +187,15 @@ public static class FpbJsonToCaex
         // Build SUC lookup once — required by CreateInstance for new IEs (Phase 2.D add).
         var sucLib = caex.SystemUnitClassLib[LibNames.SystemUnitClassLib]!;
         var sucLookup = sucLib.SystemUnitClass.ToDictionary(s => s.Name, s => s);
+
+        // Boundary-state pre-pass: FPB.JS sends a boundary state under ONE shared id
+        // on both the parent and the sub-process layer. In CAEX each layer copy is a
+        // separate InternalElement with its OWN unique id, so translate the
+        // sub-process copies to their deterministic derived ids up front. After this
+        // the whole write pipeline (index lookup, AddElement, connections, orphan
+        // removal, incomingIds) operates on distinct ids exactly as for any other
+        // element — no further layer-awareness needed downstream.
+        RemapSubProcessBoundaryStateIds(entries, elementIndex, options);
 
         // Collect every FPB.JS-side ID we see across the incoming payload — used for
         // the orphan-removal pass at the end. (Process IDs included so a process
@@ -485,7 +494,7 @@ public static class FpbJsonToCaex
 
         var toRemove = elementIndex
             .Where(kv => !incomingIds.Contains(kv.Key)
-                         && kv.Value.RefBaseSystemUnitPath is { } suc
+                         && StripAlias(kv.Value.RefBaseSystemUnitPath) is { } suc
                          && fpdSucPaths.Contains(suc)
                          && suc != processSuc)
             .Select(kv => (Key: kv.Key, Ie: kv.Value))
@@ -533,6 +542,135 @@ public static class FpbJsonToCaex
     }
 
     /// <summary>
+    /// Derive a deterministic CAEX-B-format ID for a boundary state's sub-process
+    /// copy. A boundary state exists on both the parent and the sub-process layer
+    /// and shares ONE logical FPB.JS id; in CAEX each copy needs its OWN unique ID
+    /// (IEC 62714 requires unique object IDs), linked back to the shared id via
+    /// refObj. Keying the derivation on (shared state id, sub-process id) keeps the
+    /// value stable across Convert + UpdateInPlace runs so the sub-copy can be
+    /// re-located instead of orphaned + re-created (which lost its ViewInformation).
+    /// Same Version-5 (name-based SHA-1) scheme as <see cref="DeriveSubProcessId"/>.
+    /// </summary>
+    private static string DeriveBoundaryStateId(string sharedStateBareId, string subProcessBareId)
+    {
+        if (string.IsNullOrEmpty(sharedStateBareId)) return NewId();
+        using var sha = System.Security.Cryptography.SHA1.Create();
+        var bytes = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(
+            "fpd-boundary-state:" + sharedStateBareId + "@" + subProcessBareId));
+        var guidBytes = new byte[16];
+        Array.Copy(bytes, guidBytes, 16);
+        guidBytes[6] = (byte)((guidBytes[6] & 0x0F) | 0x50);
+        guidBytes[8] = (byte)((guidBytes[8] & 0x3F) | 0x80);
+        return new Guid(guidBytes).ToString("B");
+    }
+
+    /// <summary>
+    /// Translate every sub-process boundary state from its shared FPB.JS id to a
+    /// deterministic, unique per-layer id (mirrors the read-side reunification in
+    /// <c>CaexToFpbJson</c>). A boundary state carries ONE id across layers in FPB.JS,
+    /// but needs a distinct CAEX InternalElement per layer. Rewriting the sub-process
+    /// copies (element ids + the flow endpoints and visuals that reference them) up
+    /// front lets the rest of UpdateInPlace treat them as ordinary distinct elements —
+    /// so they get matched/updated in place instead of colliding on the parent copy
+    /// and being orphan-removed. Mutates <paramref name="entries"/> in place.
+    /// </summary>
+    private static void RemapSubProcessBoundaryStateIds(
+        List<ProcessEntry> entries,
+        Dictionary<string, InternalElementType> elementIndex,
+        MapperOptions? options)
+    {
+        // PO id (bare) -> the entry (parent layer) that contains that PO.
+        var entryByPoId = new Dictionary<string, ProcessEntry>(StringComparer.OrdinalIgnoreCase);
+        foreach (var e in entries)
+            foreach (var d in e.ElementData)
+                if (d.Type == FpbTypes.ProcessOperator && !string.IsNullOrEmpty(d.Id))
+                    entryByPoId[StripBraces(d.Id)] = e;
+
+        foreach (var entry in entries)
+        {
+            var parentPoId = entry.Process.IsDecomposedProcessOperator;
+            if (string.IsNullOrEmpty(parentPoId)) continue;                       // not a sub-process
+
+            // The parent layer's state ids (when the parent entry is present in this
+            // payload). Missing/empty is fine — the elementIndex check below still
+            // recognises a boundary state whose parent copy was removed this round.
+            HashSet<string> parentStateIds;
+            if (entryByPoId.TryGetValue(StripBraces(parentPoId), out var parentEntry) && !ReferenceEquals(parentEntry, entry))
+                parentStateIds = new HashSet<string>(
+                    parentEntry.ElementData.Where(d => StateTypes.Contains(d.Type)).Select(d => StripBraces(d.Id)),
+                    StringComparer.OrdinalIgnoreCase);
+            else
+                parentStateIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            var subProcBare = StripBraces(NormalizeId(entry.Process.Id));
+
+            // PRIMARY resolution: find the EXISTING sub-layer copy via its refObj
+            // back-link (refObj == shared id, hosted under this sub-process IE).
+            // This works regardless of which id scheme originally minted the copy
+            // (derive-scheme, ShowcaseBuilder path-ids, editor-authored) — re-
+            // deriving ids only matches files created by the derive scheme and
+            // orphaned every other file's boundary copies on each update.
+            var existingByShared = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            InternalElementType? subProcIe = null;
+            if (elementIndex.TryGetValue(StripBraces(parentPoId), out var parentPoIe))
+            {
+                var refProc = parentPoIe.Attribute["refProcess"]?.Value;
+                if (!string.IsNullOrEmpty(refProc))
+                    elementIndex.TryGetValue(StripBraces(refProc), out subProcIe);
+            }
+            if (subProcIe != null)
+            {
+                foreach (var child in subProcIe.InternalElement)
+                {
+                    var childRefObj = child.Attribute["refObj"]?.Value;
+                    if (string.IsNullOrEmpty(childRefObj)) continue;
+                    existingByShared[StripBraces(childRefObj)] = StripBraces(child.ID);
+                }
+            }
+
+            var remap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase); // bare shared -> bare per-layer
+
+            foreach (var d in entry.ElementData)
+            {
+                if (!StateTypes.Contains(d.Type)) continue;
+                var bare = StripBraces(d.Id);
+
+                // 1. Existing sub-layer copy found via refObj back-link → reuse ITS id.
+                if (existingByShared.TryGetValue(bare, out var existingBare))
+                {
+                    if (!string.Equals(existingBare, bare, StringComparison.OrdinalIgnoreCase))
+                    {
+                        remap[bare] = existingBare;
+                        d.Id = existingBare;
+                    }
+                    continue;
+                }
+
+                // 2. No existing copy: derive-scheme fallback (fresh decompose, or the
+                // parent-side copy vanished this round but a derived node survives).
+                var derived = StripBraces(DeriveBoundaryStateId(bare, subProcBare));
+                var isBoundary = parentStateIds.Contains(bare) || elementIndex.ContainsKey(derived);
+                if (!isBoundary) continue;
+                remap[bare] = derived;
+                d.Id = derived;
+            }
+            if (remap.Count == 0) continue;
+
+            // Redirect flow endpoints and visuals that pointed at the shared ids.
+            foreach (var d in entry.ElementData)
+            {
+                if (d.SourceRef != null && remap.TryGetValue(StripBraces(d.SourceRef), out var ns)) d.SourceRef = ns;
+                if (d.TargetRef != null && remap.TryGetValue(StripBraces(d.TargetRef), out var nt)) d.TargetRef = nt;
+            }
+            foreach (var v in entry.ElementVisual)
+                if (remap.TryGetValue(StripBraces(v.Id), out var nv)) v.Id = nv;
+
+            MapperTrace.Info(options,
+                $"RemapBoundaryStates: sub-process '{entry.Process.Id}' → {remap.Count} boundary state(s) remapped to deterministic per-layer ids.");
+        }
+    }
+
+    /// <summary>
     /// Map an incoming FPB.JS ProcessEntry to its AML Process IE. Handles both
     /// top-level processes (entry.Process.Id is the process AML ID) and decomposed
     /// sub-processes (entry.Process.Id equals the parent ProcessOperator's FPB ID
@@ -561,7 +699,7 @@ public static class FpbJsonToCaex
         // Top-level case: entry.Process.Id is directly the process AML ID.
         if (string.IsNullOrEmpty(entry.Process.IsDecomposedProcessOperator)
             && TryLookup(entry.Process.Id, out var directHit)
-            && directHit.RefBaseSystemUnitPath == processSuc)
+            && StripAlias(directHit.RefBaseSystemUnitPath) == processSuc)
         {
             MapperTrace.Info(options, $"  ResolveProcess: matched TOP-LEVEL by ID — entry.process.id='{entry.Process.Id}' -> AML '{directHit.ID}' name='{directHit.Name}'");
             return directHit;
@@ -580,7 +718,7 @@ public static class FpbJsonToCaex
         // so both current and legacy (braced) sub-process back-links still resolve.
         var parentPoBareId = StripBraces(parentPo.ID);
         var subHit = fpdIH.InternalElement.FirstOrDefault(ie =>
-            ie.RefBaseSystemUnitPath == processSuc
+            StripAlias(ie.RefBaseSystemUnitPath) == processSuc
             && StripBraces(ie.GetRefObjOrDerived() ?? "") == parentPoBareId);
         if (subHit != null)
             MapperTrace.Info(options, $"  ResolveProcess: matched SUB-PROCESS via refObj — parent PO '{parentPo.ID}' name='{parentPo.Name}' -> sub-process '{subHit.ID}' name='{subHit.Name}'");
@@ -641,6 +779,40 @@ public static class FpbJsonToCaex
         return n == 1 ? baseName : $"{baseName}_{n}";
     }
 
+    /// <summary>
+    /// Pre-load the interface-name counters for an element from the interfaces it
+    /// already carries, so freshly-added flows continue the _2/_3 suffix sequence
+    /// instead of duplicating existing names. First touch per element wins; later
+    /// calls are no-ops because the counters keep evolving through
+    /// <see cref="GetUniqueInterfaceName"/>.
+    /// </summary>
+    private static void SeedIfaceCounters(
+        Dictionary<string, Dictionary<string, int>> counters,
+        string elementId,
+        InternalElementType ie)
+    {
+        if (counters.ContainsKey(elementId)) return;
+        // Track the MAX suffix, not the count: with existing "FPD_FlowOut" and
+        // "FPD_FlowOut_3" a count of 2 would mint "FPD_FlowOut_3" again.
+        var byBase = new Dictionary<string, int>();
+        foreach (var ei in ie.ExternalInterface)
+        {
+            var name = ei.Name ?? "";
+            if (name.Length == 0) continue;
+            var baseName = name;
+            var suffix = 1;
+            var us = name.LastIndexOf('_');
+            if (us > 0 && int.TryParse(name[(us + 1)..], out var parsed))
+            {
+                baseName = name[..us];
+                suffix = parsed;
+            }
+            byBase.TryGetValue(baseName, out var current);
+            byBase[baseName] = Math.Max(current, suffix);
+        }
+        counters[elementId] = byBase;
+    }
+
     private static bool IsDescendantOf(CAEXBasicObject? node, InternalElementType ancestor)
     {
         for (var n = node?.CAEXParent; n != null; n = n.CAEXParent)
@@ -659,7 +831,7 @@ public static class FpbJsonToCaex
         var processSuc = ElementToSuc[FpbTypes.Process];
         for (CAEXWrapper? n = ie; n != null; n = n.CAEXParent)
         {
-            if (n is InternalElementType candidate && candidate.RefBaseSystemUnitPath == processSuc)
+            if (n is InternalElementType candidate && StripAlias(candidate.RefBaseSystemUnitPath) == processSuc)
                 return $"{candidate.Name} (id={candidate.ID})";
         }
         return "<no FPD_Process ancestor>";
@@ -688,8 +860,20 @@ public static class FpbJsonToCaex
         var bIface = link.BInterface as ExternalInterfaceType;
         if (aIface is null || bIface is null) return false;
 
-        return ReferenceEquals(aIface.CAEXParent, expectedSource)
-            && ReferenceEquals(bIface.CAEXParent, expectedTarget);
+        // Aml.Engine wrappers are NOT reference-stable — every lookup can hand
+        // out a fresh wrapper for the same XML node. ReferenceEquals here made
+        // EVERY link look rerouted, so each update tore down and recreated all
+        // links (and leaked their old interfaces). Compare by AML ID instead.
+        var aParentId = (aIface.CAEXParent as InternalElementType)?.ID;
+        var bParentId = (bIface.CAEXParent as InternalElementType)?.ID;
+        return IdsEqual(aParentId, expectedSource.ID)
+            && IdsEqual(bParentId, expectedTarget.ID);
+    }
+
+    private static bool IdsEqual(string? a, string? b)
+    {
+        if (string.IsNullOrEmpty(a) || string.IsNullOrEmpty(b)) return false;
+        return string.Equals(StripBraces(a), StripBraces(b), StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -804,6 +988,11 @@ public static class FpbJsonToCaex
         // them apart. Suffix with _2, _3, … matching BuildProcess's
         // GetNextInterfaceName scheme.
         ifaceCounters ??= new Dictionary<string, Dictionary<string, int>>();
+        // Seed from interfaces that ALREADY exist on the IE (green-field convert
+        // or earlier updates) — an unseeded counter restarts at the base name and
+        // mints duplicate interface names on every added flow.
+        SeedIfaceCounters(ifaceCounters, flowData.SourceRef, sourceIE);
+        SeedIfaceCounters(ifaceCounters, flowData.TargetRef, targetIE);
         var outBaseName = ifacePaths.Out.Split('/')[1];
         var sourceIface = sourceIE.ExternalInterface.Append(
             GetUniqueInterfaceName(ifaceCounters, flowData.SourceRef, outBaseName));
@@ -870,13 +1059,47 @@ public static class FpbJsonToCaex
         Dictionary<string, InternalLinkType> linkIndex,
         HashSet<string> incomingIds)
     {
-        var toRemove = linkIndex
-            .Where(kv => !incomingIds.Contains(kv.Key))
-            .Select(kv => kv.Value)
-            .ToList();
+        var removedKeys = new HashSet<string>(
+            linkIndex.Where(kv => !incomingIds.Contains(kv.Key)).Select(kv => kv.Key),
+            StringComparer.OrdinalIgnoreCase);
+        if (removedKeys.Count == 0) return 0;
 
-        foreach (var link in toRemove) link.Remove();
-        return toRemove.Count;
+        // Interface IDs still referenced by SURVIVING links must stay put —
+        // only interfaces that become unreferenced go with their link.
+        // RefPartnerSide can be a plain interface GUID (this mapper, CAEX 3.0)
+        // or the legacy "elementId:interfaceName" colon form (CAEX 2.x,
+        // externally authored files) — extract the interface part first, or a
+        // shared interface would look unreferenced and get deleted.
+        static string SideId(string? side)
+        {
+            if (string.IsNullOrEmpty(side)) return "";
+            var colonIdx = side.LastIndexOf(':');
+            return StripBraces(colonIdx < 0 ? side : side[(colonIdx + 1)..]);
+        }
+        var survivingIfaceIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var kv in linkIndex)
+        {
+            if (removedKeys.Contains(kv.Key)) continue;
+            var a = SideId(kv.Value.RefPartnerSideA);
+            var b = SideId(kv.Value.RefPartnerSideB);
+            if (a.Length > 0) survivingIfaceIds.Add(a);
+            if (b.Length > 0) survivingIfaceIds.Add(b);
+        }
+
+        foreach (var key in removedKeys)
+        {
+            var link = linkIndex[key];
+            // Resolve the endpoint interfaces BEFORE the link node disappears —
+            // leaving them behind leaked 2 corpse interfaces per removed flow.
+            var aIface = link.AInterface as ExternalInterfaceType;
+            var bIface = link.BInterface as ExternalInterfaceType;
+            link.Remove();
+            if (aIface != null && !survivingIfaceIds.Contains(StripBraces(aIface.ID ?? "")))
+                aIface.Remove();
+            if (bIface != null && !survivingIfaceIds.Contains(StripBraces(bIface.ID ?? "")))
+                bIface.Remove();
+        }
+        return removedKeys.Count;
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -933,7 +1156,7 @@ public static class FpbJsonToCaex
     {
         var processSuc = ElementToSuc[FpbTypes.Process];
         var subProcesses = fpdIH.InternalElement
-            .Where(ie => ie.RefBaseSystemUnitPath == processSuc
+            .Where(ie => StripAlias(ie.RefBaseSystemUnitPath) == processSuc
                          && !string.IsNullOrEmpty(ie.GetRefObjOrDerived()))
             .ToList();
 
@@ -1068,7 +1291,7 @@ public static class FpbJsonToCaex
 
         foreach (var ie in elementIndex.Values)
         {
-            if (ie.RefBaseSystemUnitPath != poSuc) continue;
+            if (StripAlias(ie.RefBaseSystemUnitPath) != poSuc) continue;
             if (string.IsNullOrEmpty(ie.Name)) continue;
 
             var refProcess = ie.Attribute["refProcess"]?.Value;
@@ -1158,10 +1381,27 @@ public static class FpbJsonToCaex
                 // against identification.uniqueIdent, which is stored without braces).
                 var expected = parentStateIds.Contains(stateBare) ? StripBraces(NormalizeId(data.Id)) : "";
                 var current  = stateIe.Attribute["refObj"]?.Value ?? "";
+
+                // Non-destructive: only ENRICH refObj when the ID-sharing convention applies
+                // (FPB.JS-side v1 reuses the parent state's id for the boundary entry).
+                // CaexToFpbJson emits each AML IE with its own ID — there is no ID-sharing on
+                // the round-trip side — so this pass would otherwise clear every legitimate
+                // refObj. EKA paper §3.2 / ETFA paper §3.4: boundary refObj IS the source of
+                // truth, the post-pass is only an ID-sharing translation aid.
+                if (string.IsNullOrEmpty(expected))
+                {
+                    if (!string.IsNullOrEmpty(current))
+                    {
+                        MapperTrace.Info(options,
+                            $"SyncBoundaryStateRefObjs: state id='{stateIe.ID}' name='{stateIe.Name}' has explicit refObj='{current}' — preserved (no ID-sharing translation needed)");
+                    }
+                    continue;
+                }
+
                 if (!string.Equals(current, expected, StringComparison.Ordinal))
                 {
                     MapperTrace.Info(options,
-                        $"SyncBoundaryStateRefObjs: state id='{stateIe.ID}' name='{stateIe.Name}' refObj '{current}' -> '{expected}' ({(expected == "" ? "no longer boundary" : "boundary state")})");
+                        $"SyncBoundaryStateRefObjs: state id='{stateIe.ID}' name='{stateIe.Name}' refObj '{current}' -> '{expected}' (boundary state derived from ID-sharing)");
                     SetAttrValue(stateIe, "refObj", expected);
                     updated++;
                 }
@@ -1182,7 +1422,7 @@ public static class FpbJsonToCaex
     {
         var fpdProcessSuc = ElementToSuc[FpbTypes.Process];
         return caex.InstanceHierarchy.FirstOrDefault(ih =>
-            ih.InternalElement.Any(ie => ie.RefBaseSystemUnitPath == fpdProcessSuc));
+            ih.InternalElement.Any(ie => StripAlias(ie.RefBaseSystemUnitPath) == fpdProcessSuc));
     }
 
     /// <summary>
@@ -1267,7 +1507,7 @@ public static class FpbJsonToCaex
         var caex = doc.CAEXFile;
 
         // Libraries MUST exist before CreateClassInstance() can work (idempotent)
-        FpdLibraries.EnsureLibraries(caex);
+        FpdLibraries.EnsureLibraries(caex, options);
 
         // Build SUC lookup for CreateClassInstance()
         var sucLib = caex.SystemUnitClassLib[LibNames.SystemUnitClassLib]!;
@@ -1432,7 +1672,20 @@ public static class FpbJsonToCaex
             string elemAmlId;
             var normalizedId = NormalizeId(obj.Id);
             if (usedAmlIds.Contains(normalizedId))
-                elemAmlId = NewId();
+            {
+                // Global id collision = this FPB.JS element already materialised under
+                // another process. For a boundary STATE (same logical state on the
+                // parent + sub-process layer, sharing one FPB.JS id) mint a
+                // DETERMINISTIC id keyed on (shared id, sub-process) so round-trips are
+                // stable and UpdateInPlace can re-locate this copy instead of orphaning
+                // it. Any other (unexpected) collision still gets a fresh id.
+                var isBoundaryState = isChildProcess && StateTypes.Contains(obj.Type)
+                    && parentEntry != null
+                    && parentEntry.ElementData.Any(e => e.Id == obj.Id && StateTypes.Contains(e.Type));
+                elemAmlId = isBoundaryState
+                    ? DeriveBoundaryStateId(StripBraces(normalizedId), StripBraces(NormalizeId(processId)))
+                    : NewId();
+            }
             else
                 elemAmlId = normalizedId;
             usedAmlIds.Add(elemAmlId);

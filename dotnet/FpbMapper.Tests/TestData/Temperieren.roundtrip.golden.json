@@ -65,7 +65,7 @@
           "longName": "",
           "revisionNumber": "",
           "shortName": "Abw\u00E4rme",
-          "uniqueIdent": "#21",
+          "uniqueIdent": "#3",
           "versionNumber": ""
         },
         "incoming": [
@@ -136,7 +136,7 @@
           "longName": "",
           "revisionNumber": "",
           "shortName": "Warmprodukt",
-          "uniqueIdent": "#22",
+          "uniqueIdent": "#6",
           "versionNumber": ""
         },
         "incoming": [
@@ -157,7 +157,7 @@
           "longName": "",
           "revisionNumber": "",
           "shortName": "Temperatur",
-          "uniqueIdent": "#23",
+          "uniqueIdent": "#7",
           "versionNumber": ""
         },
         "incoming": [],
@@ -180,7 +180,7 @@
           "longName": "",
           "revisionNumber": "",
           "shortName": "Strom",
-          "uniqueIdent": "#24",
+          "uniqueIdent": "#8",
           "versionNumber": ""
         },
         "incoming": [],
@@ -203,7 +203,7 @@
           "longName": "",
           "revisionNumber": "",
           "shortName": "Rohstoff",
-          "uniqueIdent": "#25",
+          "uniqueIdent": "#9",
           "versionNumber": ""
         },
         "incoming": [],
@@ -705,9 +705,9 @@
       "elementsContainer": [
         "#20"
       ],
-      "id": "#26",
-      "isDecomposedProcessOperator": "#26",
-      "parent": "#26"
+      "id": "#21",
+      "isDecomposedProcessOperator": "#21",
+      "parent": "#1"
     }
   },
   {
@@ -715,90 +715,26 @@
       {
         "$type": "fpb:SystemLimit",
         "elementsContainer": [
+          "#22",
+          "#23",
+          "#24",
+          "#6",
+          "#3",
+          "#21",
+          "#7",
+          "#8",
+          "#9",
+          "#25",
+          "#26",
           "#27",
           "#28",
           "#29",
-          "#22",
-          "#21",
-          "#26",
-          "#23",
-          "#24",
-          "#25",
           "#30",
           "#31",
-          "#32",
-          "#33",
-          "#34",
-          "#35",
-          "#36",
-          "#37"
+          "#32"
         ],
-        "id": "#38",
+        "id": "#33",
         "name": "Aufheizen mit Pr\u00FCfung"
-      },
-      {
-        "$type": "fpb:Product",
-        "characteristics": [],
-        "id": "#27",
-        "identification": {
-          "$type": "fpb:Identification",
-          "longName": "",
-          "revisionNumber": "",
-          "shortName": "Gutprodukt",
-          "uniqueIdent": "#27",
-          "versionNumber": ""
-        },
-        "incoming": [
-          "#36"
-        ],
-        "isAssignedTo": [
-          "#29"
-        ],
-        "name": "Gutprodukt",
-        "outgoing": []
-      },
-      {
-        "$type": "fpb:Product",
-        "characteristics": [],
-        "id": "#28",
-        "identification": {
-          "$type": "fpb:Identification",
-          "longName": "",
-          "revisionNumber": "",
-          "shortName": "Ausschuss",
-          "uniqueIdent": "#28",
-          "versionNumber": ""
-        },
-        "incoming": [
-          "#37"
-        ],
-        "isAssignedTo": [
-          "#29"
-        ],
-        "name": "Ausschuss",
-        "outgoing": []
-      },
-      {
-        "$type": "fpb:ProcessOperator",
-        "characteristics": [],
-        "id": "#29",
-        "identification": {
-          "$type": "fpb:Identification",
-          "longName": "",
-          "revisionNumber": "",
-          "shortName": "Pr\u00FCfen",
-          "uniqueIdent": "#29",
-          "versionNumber": ""
-        },
-        "incoming": [
-          "#35"
-        ],
-        "isAssignedTo": [],
-        "name": "Pr\u00FCfen",
-        "outgoing": [
-          "#36",
-          "#37"
-        ]
       },
       {
         "$type": "fpb:Product",
@@ -808,39 +744,103 @@
           "$type": "fpb:Identification",
           "longName": "",
           "revisionNumber": "",
-          "shortName": "Warmprodukt",
+          "shortName": "Gutprodukt",
           "uniqueIdent": "#22",
           "versionNumber": ""
         },
         "incoming": [
-          "#34"
+          "#31"
         ],
         "isAssignedTo": [
-          "#26",
+          "#24"
+        ],
+        "name": "Gutprodukt",
+        "outgoing": []
+      },
+      {
+        "$type": "fpb:Product",
+        "characteristics": [],
+        "id": "#23",
+        "identification": {
+          "$type": "fpb:Identification",
+          "longName": "",
+          "revisionNumber": "",
+          "shortName": "Ausschuss",
+          "uniqueIdent": "#23",
+          "versionNumber": ""
+        },
+        "incoming": [
+          "#32"
+        ],
+        "isAssignedTo": [
+          "#24"
+        ],
+        "name": "Ausschuss",
+        "outgoing": []
+      },
+      {
+        "$type": "fpb:ProcessOperator",
+        "characteristics": [],
+        "id": "#24",
+        "identification": {
+          "$type": "fpb:Identification",
+          "longName": "",
+          "revisionNumber": "",
+          "shortName": "Pr\u00FCfen",
+          "uniqueIdent": "#24",
+          "versionNumber": ""
+        },
+        "incoming": [
+          "#30"
+        ],
+        "isAssignedTo": [],
+        "name": "Pr\u00FCfen",
+        "outgoing": [
+          "#31",
+          "#32"
+        ]
+      },
+      {
+        "$type": "fpb:Product",
+        "characteristics": [],
+        "id": "#6",
+        "identification": {
+          "$type": "fpb:Identification",
+          "longName": "",
+          "revisionNumber": "",
+          "shortName": "Warmprodukt",
+          "uniqueIdent": "#6",
+          "versionNumber": ""
+        },
+        "incoming": [
           "#29"
+        ],
+        "isAssignedTo": [
+          "#21",
+          "#24"
         ],
         "name": "Warmprodukt",
         "outgoing": [
-          "#35"
+          "#30"
         ]
       },
       {
         "$type": "fpb:Energy",
         "characteristics": [],
-        "id": "#21",
+        "id": "#3",
         "identification": {
           "$type": "fpb:Identification",
           "longName": "",
           "revisionNumber": "",
           "shortName": "Abw\u00E4rme",
-          "uniqueIdent": "#21",
+          "uniqueIdent": "#3",
           "versionNumber": ""
         },
         "incoming": [
-          "#33"
+          "#28"
         ],
         "isAssignedTo": [
-          "#26"
+          "#21"
         ],
         "name": "Abw\u00E4rme",
         "outgoing": []
@@ -848,71 +848,71 @@
       {
         "$type": "fpb:ProcessOperator",
         "characteristics": [],
-        "decomposedView": "#26",
-        "id": "#26",
+        "decomposedView": "#21",
+        "id": "#21",
         "identification": {
           "$type": "fpb:Identification",
           "longName": "",
           "revisionNumber": "",
           "shortName": "Erhitzen",
-          "uniqueIdent": "#26",
+          "uniqueIdent": "#21",
           "versionNumber": ""
         },
         "incoming": [
-          "#30",
-          "#31",
-          "#32"
+          "#25",
+          "#26",
+          "#27"
         ],
         "isAssignedTo": [
-          "#39"
+          "#34"
         ],
         "name": "Erhitzen",
         "outgoing": [
-          "#40",
-          "#33",
-          "#34"
+          "#35",
+          "#28",
+          "#29"
         ]
       },
       {
         "$type": "fpb:Information",
         "characteristics": [],
-        "id": "#23",
+        "id": "#7",
         "identification": {
           "$type": "fpb:Identification",
           "longName": "",
           "revisionNumber": "",
           "shortName": "Temperatur",
-          "uniqueIdent": "#23",
+          "uniqueIdent": "#7",
           "versionNumber": ""
         },
         "incoming": [],
         "isAssignedTo": [
-          "#26"
+          "#21"
         ],
         "name": "Temperatur",
         "outgoing": [
-          "#32"
+          "#27"
         ]
       },
       {
         "$type": "fpb:Energy",
         "characteristics": [],
-        "id": "#24",
+        "id": "#8",
         "identification": {
           "$type": "fpb:Identification",
           "longName": "",
           "revisionNumber": "",
           "shortName": "Strom",
-          "uniqueIdent": "#24",
+          "uniqueIdent": "#8",
           "versionNumber": ""
         },
         "incoming": [],
         "isAssignedTo": [
-          "#26"
+          "#21"
         ],
         "name": "Strom",
         "outgoing": [
-          "#31"
+          "#26"
         ]
       },
       {
@@ -925,7 +925,7 @@
               "longName": "Eingangstemperatur des Rohstoffs",
               "revisionNumber": "0",
               "shortName": "Temperatur",
-              "uniqueIdent": "#25_c1",
+              "uniqueIdent": "#9_c1",
               "versionNumber": "1.0"
             },
             "descriptiveElement": {
@@ -961,119 +961,119 @@
             }
           }
         ],
-        "id": "#25",
+        "id": "#9",
         "identification": {
           "$type": "fpb:Identification",
           "longName": "Rohstoff (unbehandelt)",
           "revisionNumber": "0",
           "shortName": "Rohstoff",
-          "uniqueIdent": "#25",
+          "uniqueIdent": "#9",
           "versionNumber": "1.0"
         },
         "incoming": [],
         "isAssignedTo": [
-          "#26"
+          "#21"
         ],
         "name": "Rohstoff",
         "outgoing": [
-          "#30"
+          "#25"
         ]
       },
       {
         "$type": "fpb:TechnicalResource",
         "characteristics": [],
-        "id": "#39",
+        "id": "#34",
         "identification": {
           "$type": "fpb:Identification",
           "longName": "",
           "revisionNumber": "",
           "shortName": "Heizplatte",
-          "uniqueIdent": "#39",
+          "uniqueIdent": "#34",
           "versionNumber": ""
         },
         "incoming": [
-          "#40"
+          "#35"
         ],
         "isAssignedTo": [
-          "#26"
+          "#21"
         ],
         "name": "Heizplatte",
         "outgoing": []
       },
       {
         "$type": "fpb:Usage",
-        "id": "#40",
-        "sourceRef": "#26",
-        "targetRef": "#39"
+        "id": "#35",
+        "sourceRef": "#21",
+        "targetRef": "#34"
       },
       {
         "$type": "fpb:ParallelFlow",
-        "id": "#30",
+        "id": "#25",
         "inTandemWith": [],
-        "sourceRef": "#25",
-        "targetRef": "#26"
-      },
-      {
-        "$type": "fpb:ParallelFlow",
-        "id": "#31",
-        "inTandemWith": [],
-        "sourceRef": "#24",
-        "targetRef": "#26"
-      },
-      {
-        "$type": "fpb:ParallelFlow",
-        "id": "#32",
-        "inTandemWith": [],
-        "sourceRef": "#23",
-        "targetRef": "#26"
-      },
-      {
-        "$type": "fpb:ParallelFlow",
-        "id": "#33",
-        "inTandemWith": [
-          "#34"
-        ],
-        "sourceRef": "#26",
+        "sourceRef": "#9",
         "targetRef": "#21"
       },
       {
         "$type": "fpb:ParallelFlow",
-        "id": "#34",
+        "id": "#26",
+        "inTandemWith": [],
+        "sourceRef": "#8",
+        "targetRef": "#21"
+      },
+      {
+        "$type": "fpb:ParallelFlow",
+        "id": "#27",
+        "inTandemWith": [],
+        "sourceRef": "#7",
+        "targetRef": "#21"
+      },
+      {
+        "$type": "fpb:ParallelFlow",
+        "id": "#28",
         "inTandemWith": [
-          "#33"
+          "#29"
         ],
-        "sourceRef": "#26",
-        "targetRef": "#22"
+        "sourceRef": "#21",
+        "targetRef": "#3"
+      },
+      {
+        "$type": "fpb:ParallelFlow",
+        "id": "#29",
+        "inTandemWith": [
+          "#28"
+        ],
+        "sourceRef": "#21",
+        "targetRef": "#6"
       },
       {
         "$type": "fpb:Flow",
-        "id": "#35",
-        "sourceRef": "#22",
-        "targetRef": "#29"
+        "id": "#30",
+        "sourceRef": "#6",
+        "targetRef": "#24"
       },
       {
         "$type": "fpb:AlternativeFlow",
-        "id": "#36",
+        "id": "#31",
         "inTandemWith": [
-          "#37"
+          "#32"
         ],
-        "sourceRef": "#29",
-        "targetRef": "#27"
+        "sourceRef": "#24",
+        "targetRef": "#22"
       },
       {
         "$type": "fpb:AlternativeFlow",
-        "id": "#37",
+        "id": "#32",
         "inTandemWith": [
-          "#36"
+          "#31"
         ],
-        "sourceRef": "#29",
-        "targetRef": "#28"
+        "sourceRef": "#24",
+        "targetRef": "#23"
       }
     ],
     "elementVisualInformation": [
       {
         "height": 520,
-        "id": "#38",
+        "id": "#33",
         "markers": {},
         "type": "fpb:SystemLimit",
         "width": 650,
@@ -1082,7 +1082,7 @@
       },
       {
         "height": 50,
-        "id": "#27",
+        "id": "#22",
         "markers": {},
         "type": "fpb:Product",
         "width": 50,
@@ -1091,7 +1091,7 @@
       },
       {
         "height": 50,
-        "id": "#28",
+        "id": "#23",
         "markers": {},
         "type": "fpb:Product",
         "width": 50,
@@ -1100,7 +1100,7 @@
       },
       {
         "height": 80,
-        "id": "#29",
+        "id": "#24",
         "markers": {},
         "type": "fpb:ProcessOperator",
         "width": 150,
@@ -1109,7 +1109,7 @@
       },
       {
         "height": 50,
-        "id": "#22",
+        "id": "#6",
         "markers": {},
         "type": "fpb:Product",
         "width": 50,
@@ -1118,7 +1118,7 @@
       },
       {
         "height": 50,
-        "id": "#21",
+        "id": "#3",
         "markers": {},
         "type": "fpb:Energy",
         "width": 50,
@@ -1127,7 +1127,7 @@
       },
       {
         "height": 80,
-        "id": "#26",
+        "id": "#21",
         "markers": {},
         "type": "fpb:ProcessOperator",
         "width": 150,
@@ -1136,7 +1136,7 @@
       },
       {
         "height": 50,
-        "id": "#23",
+        "id": "#7",
         "markers": {},
         "type": "fpb:Information",
         "width": 50,
@@ -1145,7 +1145,7 @@
       },
       {
         "height": 50,
-        "id": "#24",
+        "id": "#8",
         "markers": {},
         "type": "fpb:Energy",
         "width": 50,
@@ -1154,7 +1154,7 @@
       },
       {
         "height": 50,
-        "id": "#25",
+        "id": "#9",
         "markers": {},
         "type": "fpb:Product",
         "width": 50,
@@ -1163,7 +1163,7 @@
       },
       {
         "height": 80,
-        "id": "#39",
+        "id": "#34",
         "markers": {},
         "type": "fpb:TechnicalResource",
         "width": 150,
@@ -1171,7 +1171,7 @@
         "y": 310
       },
       {
-        "id": "#40",
+        "id": "#35",
         "markers": {},
         "type": "fpb:Usage",
         "waypoints": [
@@ -1202,7 +1202,7 @@
         ]
       },
       {
-        "id": "#30",
+        "id": "#25",
         "markers": {},
         "type": "fpb:ParallelFlow",
         "waypoints": [
@@ -1233,7 +1233,7 @@
         ]
       },
       {
-        "id": "#31",
+        "id": "#26",
         "markers": {},
         "type": "fpb:ParallelFlow",
         "waypoints": [
@@ -1256,7 +1256,7 @@
         ]
       },
       {
-        "id": "#32",
+        "id": "#27",
         "markers": {},
         "type": "fpb:ParallelFlow",
         "waypoints": [
@@ -1287,7 +1287,7 @@
         ]
       },
       {
-        "id": "#33",
+        "id": "#28",
         "markers": {},
         "type": "fpb:ParallelFlow",
         "waypoints": [
@@ -1318,7 +1318,7 @@
         ]
       },
       {
-        "id": "#34",
+        "id": "#29",
         "markers": {},
         "type": "fpb:ParallelFlow",
         "waypoints": [
@@ -1349,7 +1349,7 @@
         ]
       },
       {
-        "id": "#35",
+        "id": "#30",
         "markers": {},
         "type": "fpb:Flow",
         "waypoints": [
@@ -1372,7 +1372,7 @@
         ]
       },
       {
-        "id": "#36",
+        "id": "#31",
         "markers": {},
         "type": "fpb:AlternativeFlow",
         "waypoints": [
@@ -1395,7 +1395,7 @@
         ]
       },
       {
-        "id": "#37",
+        "id": "#32",
         "markers": {},
         "type": "fpb:AlternativeFlow",
         "waypoints": [
@@ -1421,26 +1421,26 @@
     "process": {
       "$type": "fpb:Process",
       "consistsOfProcessOperator": [
-        "#29",
-        "#26"
+        "#24",
+        "#21"
       ],
       "consistsOfProcesses": [
-        "#26"
+        "#21"
       ],
       "consistsOfStates": [
-        "#27",
-        "#28",
         "#22",
-        "#21",
         "#23",
-        "#24",
-        "#25"
+        "#6",
+        "#3",
+        "#7",
+        "#8",
+        "#9"
       ],
-      "consistsOfSystemLimit": "#38",
+      "consistsOfSystemLimit": "#33",
       "elementsContainer": [
-        "#38",
-        "#39",
-        "#40"
+        "#33",
+        "#34",
+        "#35"
       ],
       "id": "#1",
       "isDecomposedProcessOperator": "",

@@ -1,22 +1,18 @@
-// Reference-type abstraction modelled after the ETFA 2026 paper
-// "A Flexible Reference Framework for Multi-Hierarchical AutomationML Models".
+// Reference-type abstraction modelled after the official
+// AutomationML_ObjectReferences_AttributeTypeLib (AutomationML e.V., v1.1.1-beta),
+// the published successor of the four-type framework proposed in the ETFA 2026
+// paper "A Flexible Reference Framework for Multi-Hierarchical AutomationML Models".
 //
-// The paper defines a generalised hierarchy of reference attribute types with
-// `refObj` as the root and `refBaseObj` / `refExtendedObj` / `refComposedObj` as
-// concrete derivatives. The framework is explicitly designed to be extended in
-// the future with additional types (e.g. domain-specific has/dependsOn refs)
-// without breaking existing tooling.
+// The library defines `refObj` as the abstract root and four derivatives:
+// refBaseObj (aspect → base object, same logical object), refAspectObj (reverse),
+// refDetailObj (abstract → detail representation), refAbstractObj (reverse).
 //
-// VDI 3682 currently uses a single attribute, `refObj`, on FPD_Process IEs to
-// link a sub-process back to its parent ProcessOperator. As the FPD library
-// adopts the broader Object-References framework, the same decomposition slot
-// may be expressed via refBaseObj (mirror with local attributes) or via
-// refExtendedObj/refComposedObj (semantically distinct relations).
-//
-// This abstraction lets the mapper read ANY refObj-derived attribute without
-// hard-coding the attribute name in every read site. Writes still target the
-// canonical `refObj` for now; the Stage-D refactor will route writes through
-// the same type system once the semantic choice is exposed.
+// The FPD library keeps the VDI 3682 attribute NAMES (`refObj` on a sub-process
+// and on a boundary state, `refProcess` on a process operator) and types them
+// with refAbstractObj / refBaseObj / refDetailObj respectively (see
+// MapperOptions). The read side keys on attribute names, so the entries below
+// let the mapper recognise documents that use the official type names directly
+// as attribute names as well.
 
 using Aml.Engine.CAEX;
 
@@ -38,8 +34,8 @@ public sealed class ReferenceType
 
     /// <summary>
     /// True if the referencing object and the referenced object may have
-    /// different types/structures (refExtendedObj, refComposedObj). False for
-    /// same-identity references like refBaseObj.
+    /// different types/structures (refDetailObj, refAbstractObj). False for
+    /// same-identity references like refBaseObj / refAspectObj.
     /// </summary>
     public bool AllowsHeterogeneousTargetType { get; }
 
@@ -78,29 +74,34 @@ public static class ReferenceTypes
 {
     public static readonly ReferenceType RefObj = new(
         attributeName: "refObj",
-        attributeTypePath: FpbMappings.AttrRefs.RefObj);
+        attributeTypePath: ObjectReferencesLibrary.RefObjAttributeTypePath);
 
     public static readonly ReferenceType RefBaseObj = new(
         attributeName: "refBaseObj",
         attributeTypePath: ObjectReferencesLibrary.RefBaseObjAttributeTypePath,
         parent: RefObj);
 
-    public static readonly ReferenceType RefExtendedObj = new(
-        attributeName: "refExtendedObj",
-        attributeTypePath: ObjectReferencesLibrary.RefExtendedObjAttributeTypePath,
+    public static readonly ReferenceType RefAspectObj = new(
+        attributeName: "refAspectObj",
+        attributeTypePath: ObjectReferencesLibrary.RefAspectObjAttributeTypePath,
+        parent: RefObj);
+
+    public static readonly ReferenceType RefDetailObj = new(
+        attributeName: "refDetailObj",
+        attributeTypePath: ObjectReferencesLibrary.RefDetailObjAttributeTypePath,
         parent: RefObj,
         allowsHeterogeneousTargetType: true);
 
-    public static readonly ReferenceType RefComposedObj = new(
-        attributeName: "refComposedObj",
-        attributeTypePath: ObjectReferencesLibrary.RefComposedObjAttributeTypePath,
+    public static readonly ReferenceType RefAbstractObj = new(
+        attributeName: "refAbstractObj",
+        attributeTypePath: ObjectReferencesLibrary.RefAbstractObjAttributeTypePath,
         parent: RefObj,
         allowsHeterogeneousTargetType: true);
 
     /// <summary>All reference types known to the mapper, refObj first.</summary>
     public static readonly IReadOnlyList<ReferenceType> All = new[]
     {
-        RefObj, RefBaseObj, RefExtendedObj, RefComposedObj,
+        RefObj, RefBaseObj, RefAspectObj, RefDetailObj, RefAbstractObj,
     };
 }
 
@@ -138,9 +139,9 @@ public static class InternalElementReferenceExtensions
     /// <summary>
     /// Return the value of refObj — or, if absent, the first present value of
     /// any type that derives from refObj. refObj itself takes precedence so the
-    /// existing VDI 3682 flow is unchanged; refBaseObj / refExtendedObj /
-    /// refComposedObj are picked up as fall-back to support documents that use
-    /// the Object-References library directly.
+    /// existing VDI 3682 flow is unchanged; refBaseObj / refAspectObj /
+    /// refDetailObj / refAbstractObj are picked up as fall-back to support
+    /// documents that use the official type names as attribute names.
     /// </summary>
     public static string? GetRefObjOrDerived(this InternalElementType ie)
     {

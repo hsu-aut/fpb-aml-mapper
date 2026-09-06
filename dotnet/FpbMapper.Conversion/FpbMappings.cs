@@ -29,6 +29,21 @@ public static class FpbMappings
     public static readonly Dictionary<string, string> SucToElement =
         ElementToSuc.ToDictionary(kv => kv.Value, kv => kv.Key);
 
+    /// <summary>
+    /// Strips a CAEX document alias prefix ("alias@path") from a class path.
+    /// Documents that pull the FPD libraries in through an ExternalReference
+    /// use alias-qualified paths per IEC 62714, while documents with embedded
+    /// libraries use the document-internal form the mapping tables store.
+    /// Read-side comparisons go through this helper so both layouts resolve
+    /// to the same FPB.JS types.
+    /// </summary>
+    public static string StripAlias(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) return string.Empty;
+        var at = path.IndexOf('@');
+        return at >= 0 ? path[(at + 1)..] : path;
+    }
+
     // Flow type -> AML InterfaceClass paths (Out + In) (VDI 3682 Bild 3)
     public static readonly Dictionary<string, (string Out, string In)> FlowToInterface = new()
     {
@@ -80,10 +95,11 @@ public static class FpbMappings
     {
         public const string Identification = "VDI_FPD_AttributeTypeLib/FPD_Identification";  // VDI 3682 Bild 4, object identification compound
         public const string Characteristic = "VDI_FPD_AttributeTypeLib/FPD_Characteristic";  // VDI 3682 Bild 4, characteristic compound (Category + Value + Unit)
-        public const string RefObj         = "VDI_FPD_AttributeTypeLib/refObj";              // VDI 3682 Blatt 2 §6, sub-process decomposition reference
-        public const string Bounds         = "VDI_FPD_DI_AttributeTypeLib/FPD_Bounds";       // Diagram interchange — bounding box for visual layout
-        public const string Point          = "VDI_FPD_DI_AttributeTypeLib/FPD_Point";        // Diagram interchange — single coordinate point
-        public const string Waypoint       = "VDI_FPD_DI_AttributeTypeLib/FPD_Waypoint";     // Diagram interchange — flow connection waypoints
+        public const string RefObj         = "VDI_FPD_AttributeTypeLib/refObj";              // Legacy generic reference type (MapperOptions.UseObjectReferencesLibrary = false); default layout types refObj/refProcess with the official ObjectReferences library
+        // Diagram interchange — shared, language-agnostic OMG_DD_AttributeTypeLib (see DiagramInterchangeLibrary)
+        public const string Bounds         = DiagramInterchangeLibrary.BoundsAttributeTypePath;    // bounding box for visual layout
+        public const string Point          = DiagramInterchangeLibrary.PointAttributeTypePath;     // single coordinate point
+        public const string Waypoint       = DiagramInterchangeLibrary.WaypointAttributeTypePath;  // flow connection waypoints
     }
 
     // Library names
@@ -93,7 +109,8 @@ public static class FpbMappings
         public const string RoleClassLib         = "VDI_FPD_RoleClassLib";
         public const string SystemUnitClassLib   = "VDI_FPD_SystemUnitClassLib";
         public const string AttributeTypeLib     = "VDI_FPD_AttributeTypeLib";
-        public const string DIAttributeTypeLib   = "VDI_FPD_DI_AttributeTypeLib";
+        /// <summary>Shared diagram-interchange library (external asset, see <see cref="DiagramInterchangeLibrary"/>).</summary>
+        public const string DIAttributeTypeLib   = DiagramInterchangeLibrary.LibName;
 
         /// <summary>
         /// Version stamped onto every emitted FPD library and class. Bumped when
@@ -101,7 +118,7 @@ public static class FpbMappings
         /// downstream tooling needs to notice (a new role class, a changed
         /// attribute type, an additional reference type derived from refObj).
         /// </summary>
-        public const string Version = "1.0.0";
+        public const string Version = "1.2.0";
     }
 
     // AML Base Library references (AutomationML Edition 2, v2.11.0)

@@ -33,7 +33,7 @@ public static class CaexToFpbJson
         if (doc?.CAEXFile == null) return Array.Empty<InstanceHierarchyType>();
         var processSuc = ElementToSuc[FpbTypes.Process];
         return doc.CAEXFile.InstanceHierarchy
-            .Where(ih => ih.InternalElement.Any(ie => ie.RefBaseSystemUnitPath == processSuc))
+            .Where(ih => ih.InternalElement.Any(ie => StripAlias(ie.RefBaseSystemUnitPath) == processSuc))
             .ToList();
     }
 
@@ -49,7 +49,7 @@ public static class CaexToFpbJson
 
         // Collect all FPD_Process InternalElements (flat in IH)
         var allProcessIEs = ih.InternalElement
-            .Where(ie => ie.RefBaseSystemUnitPath == ElementToSuc[FpbTypes.Process])
+            .Where(ie => StripAlias(ie.RefBaseSystemUnitPath) == ElementToSuc[FpbTypes.Process])
             .ToList();
 
         if (allProcessIEs.Count == 0)
@@ -68,9 +68,11 @@ public static class CaexToFpbJson
 
             foreach (var ie in procIE.InternalElement)
             {
-                if (ie.RefBaseSystemUnitPath == ElementToSuc[FpbTypes.ProcessOperator])
+                if (StripAlias(ie.RefBaseSystemUnitPath) == ElementToSuc[FpbTypes.ProcessOperator])
                 {
-                    poToProcessAmlId[ie.ID] = procIE.ID;
+                    // Brace-free key: refObj/refProcess values are stored without
+                    // braces, ie.ID carries them — normalize so lookups can't miss.
+                    poToProcessAmlId[NormalizeId(ie.ID)] = procIE.ID;
                     var poRefProcess = GetRefProcessValue(ie);
                     if (poRefProcess != null)
                         poRefObjMap[ie.ID] = poRefProcess;
@@ -78,8 +80,27 @@ public static class CaexToFpbJson
             }
         }
 
-        // Determine entry process (no refObj)
-        var entryProcess = allProcessIEs.FirstOrDefault(p => GetRefObjValue(p) == null)
+        // Reverse-lookup fallback: a sub-process SHOULD carry refObj -> parent
+        // PO, but externally authored AMLs (and the showcase generator) often
+        // only fill refProcess on the PO side. Without this back-fill the whole
+        // decomposition hierarchy reads FLAT (parent/entryPoint wrong, dangling
+        // decomposedView) with zero warnings.
+        foreach (var procIE in allProcessIEs)
+        {
+            if (processRefObjMap.ContainsKey(procIE.ID)) continue;
+            var procBare = NormalizeId(procIE.ID);
+            var parentPoEntry = poRefObjMap.FirstOrDefault(kv =>
+                string.Equals(NormalizeId(kv.Value), procBare, StringComparison.OrdinalIgnoreCase));
+            if (parentPoEntry.Key != null)
+            {
+                processRefObjMap[procIE.ID] = NormalizeId(parentPoEntry.Key);
+                warnings.Add($"Process '{procIE.Name}' has no refObj but PO '{parentPoEntry.Key}' " +
+                             "references it via refProcess — derived the parent link from the reverse direction.");
+            }
+        }
+
+        // Determine entry process (no refObj, neither explicit nor derived)
+        var entryProcess = allProcessIEs.FirstOrDefault(p => !processRefObjMap.ContainsKey(p.ID))
             ?? allProcessIEs[0];
 
         // Parse all processes
@@ -112,31 +133,64 @@ public static class CaexToFpbJson
             }
         }
 
+        // TWO-PHASE resolution. Phase A finalizes every process id (v1 convention:
+        // a sub-process takes its parent PO's FPB id) and updates processIdMap
+        // accordingly. Phase B resolves parent/entryPoint against the FINAL ids —
+        // doing both in one pass left grandchild parents pointing at stale minted
+        // ids, and a brace-mismatch in the lookups made every sub-process its own
+        // parent (Layer-Panel freeze on open).
+
+        // ── Phase A: finalize process ids ────────────────────────────────
+        var mintedToAmlKey = processIdMap.ToDictionary(kv => kv.Value, kv => kv.Key);
+        foreach (var entry in processEntries)
+        {
+            var proc = (Dictionary<string, object>)entry["process"];
+            if (proc.TryGetValue("isDecomposedProcessOperator", out var iDPO) && iDPO is string idpo && !string.IsNullOrEmpty(idpo))
+            {
+                var idpoNorm = NormalizeId(idpo);
+                var poFpbId = amlToFpbId.TryGetValue(idpoNorm, out var mapped) ? mapped : idpoNorm;
+                proc["isDecomposedProcessOperator"] = poFpbId;
+
+                var oldId = (string)proc["id"];
+                proc["id"] = poFpbId;
+                if (mintedToAmlKey.TryGetValue(oldId, out var amlKey))
+                    processIdMap[amlKey] = poFpbId;
+            }
+        }
+
+        // ── Phase B: resolve parents + per-entry post-processing ─────────
         foreach (var entry in processEntries)
         {
             var proc = (Dictionary<string, object>)entry["process"];
 
-            // isDecomposedProcessOperator: resolve AML PO ID -> FPB.JS PO ID
-            // parent should point at the process containing the parent PO, NOT the PO itself.
-            // If any lookup fails we still emit a brace-free ID via NormalizeId so the
-            // JSON stays consistent with Phase 2.A (no {xxx} sneaks through).
-            if (proc.TryGetValue("isDecomposedProcessOperator", out var iDPO) && iDPO is string idpo && !string.IsNullOrEmpty(idpo))
+            if (proc.TryGetValue("isDecomposedProcessOperator", out var iDPO) && iDPO is string poFpbId && !string.IsNullOrEmpty(poFpbId))
             {
-                proc["isDecomposedProcessOperator"] = amlToFpbId.TryGetValue(idpo, out var poFpbId)
-                    ? poFpbId
-                    : NormalizeId(idpo);
-
-                if (poToProcessAmlId.TryGetValue(idpo, out var parentProcAmlId)
+                // parent must point at the process CONTAINING the parent PO, not the PO.
+                if (poToProcessAmlId.TryGetValue(poFpbId, out var parentProcAmlId)
                     && processIdMap.TryGetValue(parentProcAmlId, out var parentProcFpbId))
                 {
                     proc["parent"] = parentProcFpbId;
                 }
                 else
                 {
-                    proc["parent"] = proc["isDecomposedProcessOperator"];
+                    // Dangling ref: fall back to the entry process instead of a
+                    // self-reference (self-parent hard-loops the layer panel).
+                    var entryId = processIdMap[entryProcess.ID];
+                    if (string.Equals(entryId, (string)proc["id"], StringComparison.OrdinalIgnoreCase))
+                    {
+                        // The dangling process IS the entry process (cycle input:
+                        // every process carries a refObj). Drop the bogus parent
+                        // link entirely — a self-parent hard-loops the panel.
+                        warnings.Add($"Process '{proc["id"]}': parent PO '{poFpbId}' not found and process is the entry process — dropping the decomposition link.");
+                        proc.Remove("isDecomposedProcessOperator");
+                        proc.Remove("parent");
+                    }
+                    else
+                    {
+                        warnings.Add($"Process '{proc["id"]}': parent PO '{poFpbId}' not found in any process — parenting to entry process.");
+                        proc["parent"] = entryId;
+                    }
                 }
-
-                proc["id"] = proc["isDecomposedProcessOperator"];
             }
 
             // decomposedView on POs
@@ -205,7 +259,7 @@ public static class CaexToFpbJson
         // Process SystemLimit first
         string? systemLimitId = null;
         var systemLimitIE = processIE.InternalElement
-            .FirstOrDefault(ie => ie.RefBaseSystemUnitPath == ElementToSuc[FpbTypes.SystemLimit]);
+            .FirstOrDefault(ie => StripAlias(ie.RefBaseSystemUnitPath) == ElementToSuc[FpbTypes.SystemLimit]);
 
         if (systemLimitIE != null)
         {
@@ -235,14 +289,19 @@ public static class CaexToFpbJson
         var processId = NormalizeId(processIE.ID);
         processIdMap[processIE.ID] = processId;
 
-        var processRefObj = GetRefObjValue(processIE);
+        // Consult the pre-built map, NOT the raw attribute: the map also carries
+        // parent links DERIVED from the PO-side refProcess (reverse-lookup
+        // fallback for AMLs whose sub-processes ship with empty refObj).
+        var processRefObj = processRefObjMap.TryGetValue(processIE.ID, out var mappedRefObj)
+            ? mappedRefObj
+            : GetRefObjValue(processIE);
         var parentPOId = processRefObj;
 
         // Parse each object IE
         var objectIEs = processIE.InternalElement
             .Where(ie =>
             {
-                var suc = ie.RefBaseSystemUnitPath;
+                var suc = StripAlias(ie.RefBaseSystemUnitPath);
                 return !string.IsNullOrEmpty(suc) && SucToElement.ContainsKey(suc)
                     && suc != ElementToSuc[FpbTypes.Process];
             }).ToList();
@@ -259,21 +318,35 @@ public static class CaexToFpbJson
 
         foreach (var ie in objectIEs)
         {
-            var sucPath = ie.RefBaseSystemUnitPath;
+            var sucPath = StripAlias(ie.RefBaseSystemUnitPath);
             if (!SucToElement.TryGetValue(sucPath, out var fpbType)) continue;
             if (fpbType == FpbTypes.SystemLimit || fpbType == FpbTypes.Process) continue;
 
             // Element ID takes the AML ID (stripped) so UpdateInPlace can match later.
             var elemId = NormalizeId(ie.ID);
+
+            // Boundary-state reunification: a boundary state exists on both the parent
+            // and the sub-process layer as TWO CAEX InternalElements with DISTINCT ids
+            // (IEC 62714 requires unique object ids), but FPB.JS represents it as ONE
+            // logical state sharing a SINGLE id across layers. The sub-process copy's
+            // refObj points back at that shared id — surface it under that id so FPB.JS
+            // links the layers and a later UpdateInPlace sees a consistent snapshot.
+            if ((ElementMetadataRegistry.Get(fpbType)?.IsState ?? false))
+            {
+                var sharedRef = ie.GetRefObjOrDerived();
+                if (!string.IsNullOrEmpty(sharedRef))
+                    elemId = NormalizeId(sharedRef);
+            }
+
             var name = ParseShortName(ie) ?? ie.Name ?? "";
 
             elementIdMap[ie.ID] = elemId;
-            amlToFpbId[ie.ID] = elemId;
+            amlToFpbId[NormalizeId(ie.ID)] = elemId;
 
             // Collect ExternalInterfaces
             foreach (var extIf in ie.ExternalInterface)
             {
-                var refClass = extIf.RefBaseClassPath;
+                var refClass = StripAlias(extIf.RefBaseClassPath);
                 if (!string.IsNullOrEmpty(refClass) && InterfaceToFlow.TryGetValue(refClass, out var info))
                 {
                     interfaceMap[extIf.ID] = new InterfaceInfo
@@ -555,8 +628,8 @@ public static class CaexToFpbJson
     private static string? GetRefObjValue(InternalElementType ie)
     {
         // Routed through the reference-type abstraction so that documents which
-        // use refBaseObj / refExtendedObj / refComposedObj as the decomposition
-        // link (per the ETFA 2026 Object-References framework) are recognised
+        // use refBaseObj / refDetailObj / refAbstractObj as the decomposition
+        // link (official ObjectReferences library type names) are recognised
         // without further code edits. refObj itself still wins when both are
         // present, preserving back-compat with current VDI 3682 documents.
         return ie.GetRefObjOrDerived();

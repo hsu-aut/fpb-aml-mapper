@@ -61,7 +61,10 @@ context FPD_Process inv ProcessNamed:
   self.name->notEmpty()
 
 context FPD_Object inv LongNameMandatory:
-  self.identification.longName->notEmpty() and self.identification.longName.size() > 0
+  -- Name fallback (like D3/D4): FPB.js populates shortName/name but leaves
+  -- longName empty on every element — without the fallback this rule floods
+  -- every model with one finding per element.
+  (self.identification.longName->notEmpty() and self.identification.longName.size() > 0) or (self.identification.shortName->notEmpty() and self.identification.shortName.size() > 0) or self.name->notEmpty()
 
 context FPD_Object inv VersionRevisionPresent:
   self.identification.versionNumber->size() = 1 and self.identification.revisionNumber->size() = 1
@@ -73,7 +76,7 @@ context FPD_ProcessOperator inv RefProcessResolvable:
   self.refProcess->notEmpty() implies self.project.process->exists(p | p.id = self.refProcess)
 
 context FPD_Object inv AllReferencesResolvable:
-  Sequence{self.refObj, self.refBaseObj, self.refExtendedObj, self.refComposedObj}->select(r | r->notEmpty())->forAll(r | self.project.containedElement->exists(e | e.identification.uniqueIdent = r))
+  Sequence{self.refObj, self.refBaseObj, self.refAspectObj, self.refDetailObj, self.refAbstractObj}->select(r | r->notEmpty())->forAll(r | self.project.containedElement->exists(e | e.identification.uniqueIdent = r))
 
 context FPD_ProcessOperator inv ProcessOperatorHasIO:
   self.incomingConnections->select(c | c.oclIsKindOf(FPD_Flow))->size() >= 1 and self.outgoingConnections->select(c | c.oclIsKindOf(FPD_Flow))->size() >= 1

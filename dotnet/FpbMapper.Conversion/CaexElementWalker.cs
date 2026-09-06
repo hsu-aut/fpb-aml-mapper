@@ -44,7 +44,7 @@ public static class CaexElementWalker
         var result = new List<InternalElementType>();
         WalkInternalElements(doc, ie =>
         {
-            if (ie.RefBaseSystemUnitPath == sucPath) result.Add(ie);
+            if (FpbMappings.StripAlias(ie.RefBaseSystemUnitPath) == sucPath) result.Add(ie);
         });
         return result;
     }

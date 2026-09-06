@@ -170,8 +170,8 @@ public static class FpbJsonParser
         var process = new FpbProcess
         {
             Id = procEl.GetStringProp("id"),
-            IsDecomposedProcessOperator = procEl.GetStringPropOrNull("isDecomposedProcessOperator"),
-            Parent = procEl.GetStringPropOrNull("parent"),
+            IsDecomposedProcessOperator = procEl.GetIdRefProp("isDecomposedProcessOperator"),
+            Parent = procEl.GetIdRefProp("parent"),
             ConsistsOfSystemLimit = procEl.GetStringPropOrNull("consistsOfSystemLimit"),
         };
         if (procEl.TryGetProperty("consistsOfStates", out var sts))
@@ -373,6 +373,31 @@ public static class FpbJsonParser
         if (el.TryGetProperty(name, out var val) && val.ValueKind == JsonValueKind.String)
         {
             var s = val.GetString();
+            return string.IsNullOrEmpty(s) ? null : s;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Reference field that arrives EITHER as a plain id string (v1 test
+    /// fixtures, golden files) OR as the embedded business object (live FPB.js
+    /// exports serialize isDecomposedProcessOperator/parent as objects).
+    /// Treating the object form as null silently flattened every decomposition
+    /// hierarchy that came out of the running editor.
+    /// </summary>
+    private static string? GetIdRefProp(this JsonElement el, string name)
+    {
+        if (!el.TryGetProperty(name, out var val)) return null;
+        if (val.ValueKind == JsonValueKind.String)
+        {
+            var s = val.GetString();
+            return string.IsNullOrEmpty(s) ? null : s;
+        }
+        if (val.ValueKind == JsonValueKind.Object
+            && val.TryGetProperty("id", out var idProp)
+            && idProp.ValueKind == JsonValueKind.String)
+        {
+            var s = idProp.GetString();
             return string.IsNullOrEmpty(s) ? null : s;
         }
         return null;
