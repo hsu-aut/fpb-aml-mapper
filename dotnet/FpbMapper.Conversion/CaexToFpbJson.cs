@@ -489,18 +489,24 @@ public static class CaexToFpbJson
 
             flowDataMap[flowId] = flowData;
 
-            // Build waypoints
+            // Build waypoints. Layout-free AMLs (hand-authored engineering data
+            // without diagram-interchange attributes) carry no PortCoordinate /
+            // Waypoint_* data, but FPB.JS's importer dereferences the connection
+            // visual unconditionally — a missing entry aborts the entire import.
+            // Every link therefore ships a visual with at least two waypoints,
+            // synthesized as a straight source-center -> target-center line when
+            // no stored layout exists.
             var waypoints = BuildWaypoints(outSide, inSide);
-            if (waypoints.Count > 0)
+            if (waypoints.Count < 2)
+                waypoints = FallbackWaypoints(outSide, inSide, elementVisualInformation);
+
+            elementVisualInformation.Add(new Dictionary<string, object>
             {
-                elementVisualInformation.Add(new Dictionary<string, object>
-                {
-                    ["id"] = flowId,
-                    ["type"] = flowType,
-                    ["waypoints"] = waypoints,
-                    ["markers"] = new Dictionary<string, object>(),
-                });
-            }
+                ["id"] = flowId,
+                ["type"] = flowType,
+                ["waypoints"] = waypoints,
+                ["markers"] = new Dictionary<string, object>(),
+            });
 
             // Update element references
             var sourceElem = elementDataInformation.FirstOrDefault(e => (string)e["id"] == outSide.ElementId);
@@ -826,6 +832,49 @@ public static class CaexToFpbJson
         }
 
         return waypoints.OrderBy(w => w.Index).Select(w => new[] { w.X, w.Y }).ToList();
+    }
+
+    /// <summary>
+    /// Straight-line waypoints for links whose interfaces carry no stored layout:
+    /// PortCoordinate where present, else the center of the element's shape visual,
+    /// else a fixed point so the pair is never degenerate. Only called when
+    /// <see cref="BuildWaypoints"/> yields fewer than the two points FPB.JS requires.
+    /// </summary>
+    private static List<Dictionary<string, object>> FallbackWaypoints(
+        InterfaceInfo outSide,
+        InterfaceInfo inSide,
+        List<Dictionary<string, object>> elementVisualInformation)
+    {
+        double[] Center(string elementId, double[] fallback)
+        {
+            var visual = elementVisualInformation.FirstOrDefault(v =>
+                v.TryGetValue("id", out var id) && (string)id == elementId
+                && v.ContainsKey("width"));
+            if (visual == null) return fallback;
+            return new[]
+            {
+                (double)visual["x"] + (double)visual["width"] / 2,
+                (double)visual["y"] + (double)visual["height"] / 2,
+            };
+        }
+
+        var source = outSide.PortCoordinate ?? Center(outSide.ElementId, new double[] { 0, 0 });
+        var target = inSide.PortCoordinate ?? Center(inSide.ElementId, new double[] { 200, 150 });
+
+        // Same shape as the PortCoordinate-derived points in BuildWaypoints —
+        // the write side persists these as PortCoordinates, so the next read
+        // reproduces them 1:1 and echo cycles stay idempotent.
+        static Dictionary<string, object> Point(double[] p) => new()
+        {
+            ["original"] = new Dictionary<string, object>
+            {
+                ["x"] = p[0],
+                ["y"] = p[1],
+            },
+            ["x"] = p[0], ["y"] = p[1],
+        };
+
+        return new List<Dictionary<string, object>> { Point(source), Point(target) };
     }
 
     private static List<Dictionary<string, object>> BuildWaypoints(InterfaceInfo outSide, InterfaceInfo inSide)
