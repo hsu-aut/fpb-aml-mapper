@@ -18,10 +18,14 @@ namespace FpbMapper.Tests.Showcases;
 /// </summary>
 public class ShowcaseTests
 {
-    private static string OutputDir()
+    internal static string OutputDir()
     {
         var fromEnv = Environment.GetEnvironmentVariable("SHOWCASE_OUTPUT_DIR");
-        if (!string.IsNullOrWhiteSpace(fromEnv)) return fromEnv;
+        if (!string.IsNullOrWhiteSpace(fromEnv))
+        {
+            Directory.CreateDirectory(fromEnv);
+            return fromEnv;
+        }
         // BaseDirectory: …/FpbMapper.Tests/bin/Debug/net8.0/
         // Six "../" walks back to …/AML/ where the plugin lives next to the mapper.
         var here = AppContext.BaseDirectory;

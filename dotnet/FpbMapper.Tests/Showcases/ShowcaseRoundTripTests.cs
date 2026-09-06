@@ -21,19 +21,19 @@ public class ShowcaseRoundTripTests
         yield return new object[] { "Showcase-C-CncRobotikMontage.aml" };
     }
 
-    private static string ExamplesDir()
+    // The showcase AMLs are produced by the generator facts in ShowcaseTests.
+    // Run them once here so this class does not depend on test ordering or on
+    // a pre-existing plugin checkout (CI runs the mapper repo alone).
+    private static readonly Lazy<string> GeneratedDir = new(() =>
     {
-        // Walk up from the test bin dir until the plugin examples folder is found.
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir != null)
-        {
-            var candidate = Path.Combine(dir.FullName, "fpb-aml-editor-plugin", "examples");
-            if (Directory.Exists(candidate)) return candidate;
-            dir = dir.Parent;
-        }
-        throw new DirectoryNotFoundException(
-            "fpb-aml-editor-plugin/examples not found above " + AppContext.BaseDirectory);
-    }
+        var gen = new ShowcaseTests();
+        gen.Generate_Showcase_A_Waermetauscher();
+        gen.Generate_Showcase_B_Pharma_MultiIh();
+        gen.Generate_Showcase_C_Cnc_Robotik();
+        return ShowcaseTests.OutputDir();
+    });
+
+    private static string ExamplesDir() => GeneratedDir.Value;
 
     [Theory]
     [MemberData(nameof(ShowcaseFiles))]
