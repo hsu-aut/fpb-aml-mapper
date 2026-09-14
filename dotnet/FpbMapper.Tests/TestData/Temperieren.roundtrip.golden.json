@@ -30,7 +30,7 @@
           "#19"
         ],
         "id": "#20",
-        "name": "Erhitzen"
+        "name": "SL_Erhitzen"
       },
       {
         "$type": "fpb:ProcessOperator",

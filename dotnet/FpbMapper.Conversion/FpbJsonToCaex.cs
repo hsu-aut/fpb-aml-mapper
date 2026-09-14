@@ -1610,7 +1610,11 @@ public static class FpbJsonToCaex
             slIE.Name = "SystemLimit_" + processName.Replace(" ", "");
             slIE.ID = NormalizeId(slData.Id);
             procIE.Insert(slIE);
-            SetIdentification(slIE, slData.Identification, processName, options);
+            // The SystemLimit's own name first. processName is the parent
+            // operator's name for a sub-process, and only matches the
+            // SystemLimit for the top-level process, where it is taken from it.
+            SetIdentification(slIE, slData.Identification,
+                !string.IsNullOrEmpty(slData.Name) ? slData.Name : processName, options);
             if (visualMap.TryGetValue(slData.Id, out var slVisual))
             {
                 SetViewInformation(slIE, slVisual, options);
