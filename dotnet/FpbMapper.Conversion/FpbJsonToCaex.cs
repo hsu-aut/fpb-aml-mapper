@@ -453,17 +453,11 @@ public static class FpbJsonToCaex
         parent.Insert(ie);
 
         SetIdentification(ie, data.Identification, data.Name ?? "", options);
+        // Elements without visual data get no ViewInformation, not even the
+        // SystemLimit: FPB.JS arranges what lacks layout on import.
         if (visualMap.TryGetValue(data.Id, out var visual))
         {
             SetViewInformation(ie, visual, options);
-        }
-        else if (data.Type == FpbTypes.SystemLimit)
-        {
-            // A freshly-added SystemLimit without visual data would render
-            // as a 0×0 invisible box in FPB.JS. Apply sensible defaults so
-            // the user gets a usable canvas.
-            SetViewInformation(ie, new VisualInfo { X = 100, Y = 100, Width = 600, Height = 400 }, options);
-            MapperTrace.Info(options, $"AddElement: SystemLimit '{ie.ID}' had no visual data in snapshot — applied default ViewInformation (100,100,600,400)");
         }
 
         if (data.Characteristics != null && data.Characteristics.Count > 0)
@@ -1615,16 +1609,11 @@ public static class FpbJsonToCaex
             // SystemLimit for the top-level process, where it is taken from it.
             SetIdentification(slIE, slData.Identification,
                 !string.IsNullOrEmpty(slData.Name) ? slData.Name : processName, options);
+            // No default layout for a SystemLimit without visual data: FPB.JS
+            // arranges the whole process on import when nothing is placed.
             if (visualMap.TryGetValue(slData.Id, out var slVisual))
             {
                 SetViewInformation(slIE, slVisual, options);
-            }
-            else
-            {
-                // Defaults for the SystemLimit when the snapshot lacks visual
-                // data — otherwise it renders as a 0×0 invisible box in FPB.JS.
-                SetViewInformation(slIE, new VisualInfo { X = 100, Y = 100, Width = 600, Height = 400 }, options);
-                MapperTrace.Info(options, $"BuildProcess: SystemLimit '{slIE.ID}' had no visual data — applied default ViewInformation (100,100,600,400)");
             }
         }
 
