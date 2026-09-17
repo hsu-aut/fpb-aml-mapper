@@ -2,7 +2,7 @@
 <CAEXFile SchemaVersion="3.0" FileName="VDI_FPD_DomainLibrary_v0.7.aml" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://www.dke.de/CAEX">
   <SuperiorStandardVersion>AutomationML 2.1</SuperiorStandardVersion>
   <SourceDocumentInformation OriginName="fpb-aml-mapper" OriginID="fpb-aml-mapper-1.2" OriginVersion="1.2.0" LastWritingDateTime="2026-09-06T16:42:33.535637+02:00" />
-  <ExternalReference Path="https://9t4kqL7NX8JsW6o@automationml.ovgu.de/public.php/webdav/AutomationML_Base_Libraries_AMLEd2_2.11.0.aml" Alias="AutomationMLBaseLibrariesAMLEd22_11_0" />
+  <ExternalReference Path="AutomationML_Base_Libraries_AMLEd2_2.11.0.aml" Alias="AutomationMLBaseLibrariesAMLEd22_11_0" />
   <ExternalReference Path="AutomationML_ObjectReferences_AttributeTypeLib_AMLEd2_1.1.1-beta.aml" Alias="ObjectReferences" />
   <ExternalReference Path="OMG_DD_AttributeTypeLib_v0.1.aml" Alias="OMG_DD" />
   <InterfaceClassLib Name="VDI_FPD_InterfaceClassLib">
