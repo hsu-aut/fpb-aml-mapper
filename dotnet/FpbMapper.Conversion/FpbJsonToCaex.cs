@@ -374,8 +374,12 @@ public static class FpbJsonToCaex
             }
         }
 
+        // Links from anywhere in the document into what is removed below; they
+        // would point at nothing afterwards (collected before each Remove()).
+        var removedTargets = new RemovedLinkTargets();
+
         MapperTrace.Attempt(options, "RemoveOrphans", "FPD elements not in incoming snapshot");
-        var removedCount = RemoveOrphanedFpdElements(fpdIH, elementIndex, incomingIds, options);
+        var removedCount = RemoveOrphanedFpdElements(fpdIH, elementIndex, incomingIds, removedTargets, options);
         MapperTrace.Result(options, "RemoveOrphans", $"removed {removedCount} element(s)");
 
         MapperTrace.Attempt(options, "RemoveOrphans", "InternalLinks not in incoming snapshot");
@@ -393,8 +397,12 @@ public static class FpbJsonToCaex
                 incomingDecomposedParentPoIds.Add(e.Process.IsDecomposedProcessOperator);
         }
         MapperTrace.Attempt(options, "RemoveOrphanSubProcesses", $"sub-processes whose parent PO no longer carries decomposedView ({incomingDecomposedParentPoIds.Count} kept-alive parent POs)");
-        var processesRemoved = RemoveOrphanedSubProcesses(fpdIH, incomingDecomposedParentPoIds, elementIndex, options);
+        var processesRemoved = RemoveOrphanedSubProcesses(fpdIH, incomingDecomposedParentPoIds, elementIndex, removedTargets, options);
         MapperTrace.Result(options, "RemoveOrphanSubProcesses", $"removed {processesRemoved} sub-process(es)");
+
+        MapperTrace.Attempt(options, "RemoveLinksIntoRemoved", "InternalLinks anywhere in the document pointing into removed elements");
+        var danglingRemoved = RemoveLinksIntoRemovedElements(existing, removedTargets, warnings);
+        MapperTrace.Result(options, "RemoveLinksIntoRemoved", $"removed {danglingRemoved} link(s)");
 
         // Audit-fix #2+#3 — keep boundary-state refObj in sync across the
         // decomposition. UpdateExistingElement / AddElement don't touch refObj
@@ -481,6 +489,7 @@ public static class FpbJsonToCaex
         InstanceHierarchyType fpdIH,
         Dictionary<string, InternalElementType> elementIndex,
         HashSet<string> incomingIds,
+        RemovedLinkTargets removedTargets,
         MapperOptions? options = null)
     {
         var fpdSucPaths = new HashSet<string>(ElementToSuc.Values);
@@ -498,6 +507,7 @@ public static class FpbJsonToCaex
         {
             MapperTrace.Attempt(options, "RemoveOrphanElement",
                 $"id='{ie.ID}' name='{ie.Name}' type='{ie.RefBaseSystemUnitPath}' (no longer in incoming snapshot)");
+            removedTargets.Collect(ie);
             ie.Remove();
             // Audit-fix #1: keep elementIndex consistent with the AML tree.
             elementIndex.Remove(key);
@@ -505,6 +515,76 @@ public static class FpbJsonToCaex
         }
 
         return toRemove.Count;
+    }
+
+    /// <summary>
+    /// What InternalLinks may point at inside the elements UpdateInPlace removes:
+    /// their interfaces by ID (CAEX 3.0, this mapper) and the elements by ID for
+    /// the "element id:interface name" form (CAEX 2.15, other tools). Each maps
+    /// to the name of the removed element the user deleted, for the warning.
+    /// </summary>
+    private sealed class RemovedLinkTargets
+    {
+        private readonly Dictionary<string, string> _interfaces = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, string> _elements = new(StringComparer.OrdinalIgnoreCase);
+
+        public bool IsEmpty => _interfaces.Count == 0 && _elements.Count == 0;
+
+        /// <summary>Record <paramref name="removed"/> with everything below it, before it is removed.</summary>
+        public void Collect(InternalElementType removed)
+        {
+            var name = removed.Name ?? removed.ID ?? "";
+            void Visit(InternalElementType ie)
+            {
+                if (!string.IsNullOrEmpty(ie.ID)) _elements[StripBraces(ie.ID)] = name;
+                foreach (var iface in ie.ExternalInterface) VisitInterface(iface);
+                foreach (var child in ie.InternalElement) Visit(child);
+            }
+            void VisitInterface(ExternalInterfaceType iface)
+            {
+                if (!string.IsNullOrEmpty(iface.ID)) _interfaces[StripBraces(iface.ID)] = name;
+                foreach (var nested in iface.ExternalInterface) VisitInterface(nested);
+            }
+            Visit(removed);
+        }
+
+        /// <summary>The removed element a partner side points into, or null.</summary>
+        public string? Target(string? side)
+        {
+            if (string.IsNullOrEmpty(side)) return null;
+            // an interface ID first: IDs such as "urn:uuid:..." contain colons too
+            if (_interfaces.TryGetValue(StripBraces(side), out var byInterface)) return byInterface;
+            var colon = side.LastIndexOf(':');
+            return colon > 0 && _elements.TryGetValue(StripBraces(side[..colon]), out var byElement) ? byElement : null;
+        }
+    }
+
+    /// <summary>
+    /// Remove every InternalLink in the document that points into an element
+    /// removed by this update, and name it in the warnings. Such a link, in a
+    /// plant hierarchy or drawn by the user, would otherwise point at nothing.
+    /// Links that were dangling before the update are left alone.
+    /// </summary>
+    private static int RemoveLinksIntoRemovedElements(CAEXDocument doc, RemovedLinkTargets removedTargets, List<string> warnings)
+    {
+        if (removedTargets.IsEmpty) return 0;
+
+        var doomed = new List<(InternalLinkType Link, string Owner, string Target)>();
+        CaexElementWalker.WalkInternalElements(doc, ie =>
+        {
+            foreach (var link in ie.InternalLink)
+            {
+                var target = removedTargets.Target(link.RefPartnerSideA) ?? removedTargets.Target(link.RefPartnerSideB);
+                if (target != null) doomed.Add((link, ie.Name ?? ie.ID ?? "", target));
+            }
+        });
+
+        foreach (var (link, owner, target) in doomed)
+        {
+            warnings.Add($"Removed link '{link.Name}' in '{owner}': it pointed to '{target}', which was deleted.");
+            link.Remove();
+        }
+        return doomed.Count;
     }
 
     private static string WrapBraces(string id)
@@ -1146,6 +1226,7 @@ public static class FpbJsonToCaex
         InstanceHierarchyType fpdIH,
         HashSet<string> incomingDecomposedParentPoIds,
         Dictionary<string, InternalElementType> elementIndex,
+        RemovedLinkTargets removedTargets,
         MapperOptions? options = null)
     {
         var processSuc = ElementToSuc[FpbTypes.Process];
@@ -1175,6 +1256,7 @@ public static class FpbJsonToCaex
             // otherwise SyncDecompositionNamesPostPass (and anything else
             // reading elementIndex post-removal) sees detached elements.
             PurgeSubtreeFromIndex(sub, elementIndex);
+            removedTargets.Collect(sub);
             sub.Remove();
             removed++;
             MapperTrace.Result(options, "RemoveSubProcess", $"removed (plus purged subtree from elementIndex)");
