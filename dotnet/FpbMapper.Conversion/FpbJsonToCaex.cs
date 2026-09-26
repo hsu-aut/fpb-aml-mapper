@@ -28,7 +28,7 @@ public static class FpbJsonToCaex
         sdi.OriginName = "fpb-aml-mapper";
         sdi.OriginID = "fpb-aml-mapper-1.0";
         sdi.OriginVersion = "0.1.0";
-        sdi.LastWritingDateTime = DateTime.UtcNow;
+        sdi.LastWritingDateTime = MapperEnvironment.UtcNow;
 
         var warnings = AppendInto(doc, project, entries, options);
         return new ConversionResult<CAEXDocument>(doc, warnings);
@@ -62,13 +62,13 @@ public static class FpbJsonToCaex
         var sucLookup = sucLib.SystemUnitClass.ToDictionary(s => s.Name, s => s);
 
         var procIE = CreateInstance(sucLookup, "FPD_Process");
-        procIE.ID = Guid.NewGuid().ToString("B");
+        procIE.ID = MapperEnvironment.NewGuid().ToString("B");
         procIE.Name = processName;
         ih.Insert(procIE);
         SetAttrValue(procIE, "refObj", "");
 
         var slIE = CreateInstance(sucLookup, "FPD_SystemLimit");
-        slIE.ID = Guid.NewGuid().ToString("B");
+        slIE.ID = MapperEnvironment.NewGuid().ToString("B");
         slIE.Name = "SystemLimit_" + processName.Replace(" ", "");
         procIE.Insert(slIE);
 
@@ -589,7 +589,7 @@ public static class FpbJsonToCaex
 
     private static string WrapBraces(string id)
     {
-        if (string.IsNullOrEmpty(id)) return Guid.NewGuid().ToString("B");
+        if (string.IsNullOrEmpty(id)) return MapperEnvironment.NewGuid().ToString("B");
         return (id.Length >= 2 && id[0] == '{' && id[^1] == '}') ? id : "{" + id + "}";
     }
 
@@ -2174,7 +2174,7 @@ public static class FpbJsonToCaex
         attr.Value = value.ToString(System.Globalization.CultureInfo.InvariantCulture);
     }
 
-    private static string NewId() => Guid.NewGuid().ToString("B");
+    private static string NewId() => MapperEnvironment.NewGuid().ToString("B");
 
     private static string NormalizeId(string id)
     {

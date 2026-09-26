@@ -887,7 +887,7 @@ public static class CaexToFpbJson
         return refPartnerSide[(colonIdx + 1)..];
     }
 
-    private static string NewId() => Guid.NewGuid().ToString("B");
+    private static string NewId() => MapperEnvironment.NewGuid().ToString("B");
 
     /// <summary>
     /// Convert an AML element ID (typically CAEX B-format like "{xxx-yyy}") to the
@@ -904,7 +904,7 @@ public static class CaexToFpbJson
     /// </remarks>
     private static string NormalizeId(string? amlId)
     {
-        if (string.IsNullOrEmpty(amlId)) return Guid.NewGuid().ToString();  // bare, no braces
+        if (string.IsNullOrEmpty(amlId)) return MapperEnvironment.NewGuid().ToString();  // bare, no braces
         if (amlId.Length >= 2 && amlId[0] == '{' && amlId[^1] == '}')
             return amlId.Substring(1, amlId.Length - 2);
         return amlId;

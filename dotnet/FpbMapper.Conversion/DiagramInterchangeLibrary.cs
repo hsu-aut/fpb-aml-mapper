@@ -38,7 +38,7 @@ public static class DiagramInterchangeLibrary
         sdi.OriginName = "fpb-aml-mapper";
         sdi.OriginID = "omg-dd-attributetypelib";
         sdi.OriginVersion = Version;
-        sdi.LastWritingDateTime = DateTime.UtcNow;
+        sdi.LastWritingDateTime = MapperEnvironment.UtcNow;
         EnsureIn(caex);
         return doc;
     }
