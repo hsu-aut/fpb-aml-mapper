@@ -887,10 +887,13 @@ public static class FpbJsonToCaex
         counters[elementId] = byBase;
     }
 
+    // Compares the XML nodes: Aml.Engine hands out a new wrapper for every
+    // CAEXParent, so comparing the wrappers never matched and every added flow
+    // was reported as crossing processes.
     private static bool IsDescendantOf(CAEXBasicObject? node, InternalElementType ancestor)
     {
         for (var n = node?.CAEXParent; n != null; n = n.CAEXParent)
-            if (ReferenceEquals(n, ancestor)) return true;
+            if (ReferenceEquals(n.Node, ancestor.Node)) return true;
         return false;
     }
 
