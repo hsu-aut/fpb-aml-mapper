@@ -195,7 +195,7 @@ public static class FpbJsonToCaex
         // the whole write pipeline (index lookup, AddElement, connections, orphan
         // removal, incomingIds) operates on distinct ids exactly as for any other
         // element — no further layer-awareness needed downstream.
-        RemapSubProcessBoundaryStateIds(entries, elementIndex, options);
+        var boundaryOrigins = RemapSubProcessBoundaryStateIds(entries, elementIndex, options);
 
         // Collect every FPB.JS-side ID we see across the incoming payload — used for
         // the orphan-removal pass at the end. (Process IDs included so a process
@@ -412,7 +412,7 @@ public static class FpbJsonToCaex
         // the parent entry's ElementData. Mirrors the green-field Convert
         // logic at lines 1186-1198.
         MapperTrace.Attempt(options, "SyncBoundaryStateRefObjs", "post-pass re-deriving refObj on every sub-process state from the snapshot");
-        var boundarySyncs = SyncBoundaryStateRefObjs(entries, elementIndex, options);
+        var boundarySyncs = SyncBoundaryStateRefObjs(entries, elementIndex, boundaryOrigins, options);
         MapperTrace.Result(options, "SyncBoundaryStateRefObjs", $"synced refObj on {boundarySyncs} state(s) across decomposition");
 
         // Post-pass — keep PO ⇄ child Process names in sync. Runs after every
@@ -647,12 +647,17 @@ public static class FpbJsonToCaex
     /// front lets the rest of UpdateInPlace treat them as ordinary distinct elements —
     /// so they get matched/updated in place instead of colliding on the parent copy
     /// and being orphan-removed. Mutates <paramref name="entries"/> in place.
+    /// Returns, per remapped copy (bare per-layer id), the bare shared id of the
+    /// state it shows: after the remap the copy no longer carries that id, so
+    /// <see cref="SyncBoundaryStateRefObjs"/> needs it to write refObj.
     /// </summary>
-    private static void RemapSubProcessBoundaryStateIds(
+    private static Dictionary<string, string> RemapSubProcessBoundaryStateIds(
         List<ProcessEntry> entries,
         Dictionary<string, InternalElementType> elementIndex,
         MapperOptions? options)
     {
+        var origins = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
         // PO id (bare) -> the entry (parent layer) that contains that PO.
         var entryByPoId = new Dictionary<string, ProcessEntry>(StringComparer.OrdinalIgnoreCase);
         foreach (var e in entries)
@@ -728,6 +733,8 @@ public static class FpbJsonToCaex
                 remap[bare] = derived;
                 d.Id = derived;
             }
+            foreach (var pair in remap)
+                origins[pair.Value] = pair.Key;
             if (remap.Count == 0) continue;
 
             // Redirect flow endpoints and visuals that pointed at the shared ids.
@@ -742,6 +749,7 @@ public static class FpbJsonToCaex
             MapperTrace.Info(options,
                 $"RemapBoundaryStates: sub-process '{entry.Process.Id}' → {remap.Count} boundary state(s) remapped to deterministic per-layer ids.");
         }
+        return origins;
     }
 
     /// <summary>
@@ -1419,6 +1427,7 @@ public static class FpbJsonToCaex
     private static int SyncBoundaryStateRefObjs(
         List<ProcessEntry> entries,
         Dictionary<string, InternalElementType> elementIndex,
+        Dictionary<string, string> boundaryOrigins,
         MapperOptions? options = null)
     {
         // Every entry (top-level OR sub-process) can be a parent for a deeper
@@ -1458,7 +1467,10 @@ public static class FpbJsonToCaex
 
                 // brace-free: refObj carries the uniqueIdent form (VDI 3682 rule F1 resolves it
                 // against identification.uniqueIdent, which is stored without braces).
-                var expected = parentStateIds.Contains(stateBare) ? StripBraces(NormalizeId(data.Id)) : "";
+                // A copy remapped to its per-layer id no longer shares the parent
+                // state's id; the remap remembers which state it shows.
+                var expected = parentStateIds.Contains(stateBare) ? StripBraces(NormalizeId(data.Id))
+                    : boundaryOrigins.TryGetValue(stateBare, out var origin) ? origin : "";
                 var current  = stateIe.Attribute["refObj"]?.Value ?? "";
 
                 // Non-destructive: only ENRICH refObj when the ID-sharing convention applies
