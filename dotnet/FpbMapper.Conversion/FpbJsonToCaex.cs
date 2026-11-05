@@ -383,7 +383,7 @@ public static class FpbJsonToCaex
         MapperTrace.Result(options, "RemoveOrphans", $"removed {removedCount} element(s)");
 
         MapperTrace.Attempt(options, "RemoveOrphans", "InternalLinks not in incoming snapshot");
-        var connectionsRemoved = RemoveOrphanedConnections(linkIndex, incomingIds);
+        var connectionsRemoved = RemoveOrphanedConnections(linkIndex, incomingIds, existing);
         MapperTrace.Result(options, "RemoveOrphans", $"removed {connectionsRemoved} link(s)");
 
         // Phase 2.F.2 — remove orphaned sub-processes (Compose case): if the FPB.JS
@@ -1139,10 +1139,14 @@ public static class FpbJsonToCaex
     /// Remove InternalLinks whose ID no longer appears in the incoming payload.
     /// CAEX has no FPD-vs-foreign-class distinction for links (unlike IEs), so a
     /// missing ID is the only signal here — assume FPB.JS owns the link lifecycle.
+    /// A port goes with its link only while no other link of the document uses
+    /// it: a link from outside (a plant hierarchy, a link the user drew) may
+    /// share the port of a flow (016f E4, V29).
     /// </summary>
     private static int RemoveOrphanedConnections(
         Dictionary<string, InternalLinkType> linkIndex,
-        HashSet<string> incomingIds)
+        HashSet<string> incomingIds,
+        CAEXDocument doc)
     {
         var removedKeys = new HashSet<string>(
             linkIndex.Where(kv => !incomingIds.Contains(kv.Key)).Select(kv => kv.Key),
@@ -1171,6 +1175,30 @@ public static class FpbJsonToCaex
             if (b.Length > 0) survivingIfaceIds.Add(b);
         }
 
+        // Every other link of the document that stays, in both forms of the
+        // partner side: an interface id, or "element id:interface name".
+        var survivingNamed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        void Keep(string? side)
+        {
+            if (string.IsNullOrEmpty(side)) return;
+            survivingIfaceIds.Add(StripBraces(side));
+            var colon = side.LastIndexOf(':');
+            if (colon > 0) survivingNamed.Add(StripBraces(side[..colon]) + ":" + side[(colon + 1)..]);
+        }
+        CaexElementWalker.WalkInternalElements(doc, ie =>
+        {
+            foreach (var other in ie.InternalLink)
+            {
+                if (removedKeys.Contains(StripBraces(other.ID))) continue;
+                Keep(other.RefPartnerSideA);
+                Keep(other.RefPartnerSideB);
+            }
+        });
+        bool Used(ExternalInterfaceType iface) =>
+            survivingIfaceIds.Contains(StripBraces(iface.ID ?? ""))
+            || (iface.CAEXParent is InternalElementType owner
+                && survivingNamed.Contains(StripBraces(owner.ID) + ":" + iface.Name));
+
         foreach (var key in removedKeys)
         {
             var link = linkIndex[key];
@@ -1179,9 +1207,9 @@ public static class FpbJsonToCaex
             var aIface = link.AInterface as ExternalInterfaceType;
             var bIface = link.BInterface as ExternalInterfaceType;
             link.Remove();
-            if (aIface != null && !survivingIfaceIds.Contains(StripBraces(aIface.ID ?? "")))
+            if (aIface != null && !Used(aIface))
                 aIface.Remove();
-            if (bIface != null && !survivingIfaceIds.Contains(StripBraces(bIface.ID ?? "")))
+            if (bIface != null && !Used(bIface))
                 bIface.Remove();
         }
         return removedKeys.Count;

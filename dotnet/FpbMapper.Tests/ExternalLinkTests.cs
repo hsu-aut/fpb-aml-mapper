@@ -133,4 +133,111 @@ public class ExternalLinkTests
         Assert.DoesNotContain("UserNote", LinkNames(holder));
         Assert.Contains(result.Warnings, w => w.Contains("UserNote"));
     }
+
+    // ── a port that a link from outside shares with a flow (016f E4, V29) ──
+
+    /// <summary>The flow from "Warmprodukt" to "Prüfen" of Temperieren.</summary>
+    private const string FlowId = "d5dc692d-61ac-4b4b-aea5-3d3044345aa7";
+
+    private static InternalLinkType FlowLink(CAEXDocument doc)
+    {
+        InternalLinkType? found = null;
+        foreach (var ie in Walk(doc.CAEXFile.InstanceHierarchy.First().InternalElement))
+            foreach (var link in ie.InternalLink)
+                if ((link.ID ?? "").Trim('{', '}').Equals(FlowId, StringComparison.OrdinalIgnoreCase)) found = link;
+        return found ?? throw new InvalidOperationException("flow not found");
+    }
+
+    /// <summary>The round-trip JSON without the flow <paramref name="id"/>.</summary>
+    private static string WithoutFlow(CAEXDocument doc, string id)
+    {
+        var root = JsonNode.Parse(CaexToFpbJson.Convert(doc).Value)!.AsArray();
+        foreach (var entry in root.Skip(1))
+        {
+            var data = entry!["elementDataInformation"]!.AsArray();
+            foreach (var node in data.Where(e => string.Equals((string?)e!["id"], id, StringComparison.OrdinalIgnoreCase)).ToList()) data.Remove(node);
+            var visual = entry!["elementVisualInformation"]!.AsArray();
+            foreach (var node in visual.Where(e => string.Equals((string?)e!["id"], id, StringComparison.OrdinalIgnoreCase)).ToList()) visual.Remove(node);
+        }
+        return root.ToJsonString();
+    }
+
+    private static bool InterfaceExists(CAEXDocument doc, string? id)
+    {
+        var bare = (id ?? "").Trim('{', '}');
+        bool Has(IEnumerable<ExternalInterfaceType> list) =>
+            list.Any(i => (i.ID ?? "").Trim('{', '}').Equals(bare, StringComparison.OrdinalIgnoreCase) || Has(i.ExternalInterface));
+        return doc.CAEXFile.InstanceHierarchy.Any(ih => Walk(ih.InternalElement).Any(ie => Has(ie.ExternalInterface)));
+    }
+
+    [Fact]
+    public void APortStaysWhileALinkFromOutsideUsesIt()
+    {
+        var doc = FpbJsonToCaex.Convert(LoadTestData("Temperieren.json")).Value;
+        var port = (ExternalInterfaceType)FlowLink(doc).AInterface;
+        var tank = doc.CAEXFile.InstanceHierarchy.Append("Plant").InternalElement.Append("Tank");
+        var toPort = tank.InternalLink.Append("TankToPort");
+        toPort.AInterface = tank.ExternalInterface.Append("ToPort");
+        toPort.BInterface = port;
+        var portId = port.ID;
+
+        FpbJsonToCaex.UpdateInPlace(doc, WithoutFlow(doc, FlowId));
+
+        Assert.Throws<InvalidOperationException>(() => FlowLink(doc));
+        Assert.True(InterfaceExists(doc, portId));
+        Assert.True(InterfaceExists(doc, tank.InternalLink.First(l => l.Name == "TankToPort").RefPartnerSideB));
+    }
+
+    [Fact]
+    public void APortStaysWhileALinkInTheFormElementIdColonNameUsesIt()
+    {
+        var doc = FpbJsonToCaex.Convert(LoadTestData("Temperieren.json")).Value;
+        var port = (ExternalInterfaceType)FlowLink(doc).AInterface;
+        var owner = (InternalElementType)port.CAEXParent;
+        var tank = doc.CAEXFile.InstanceHierarchy.Append("Plant").InternalElement.Append("Tank");
+        var toPort = tank.InternalLink.Append("TankToPortLegacy");
+        toPort.RefPartnerSideA = tank.ExternalInterface.Append("ToPort").ID;
+        toPort.RefPartnerSideB = owner.ID + ":" + port.Name;
+        var portId = port.ID;
+
+        FpbJsonToCaex.UpdateInPlace(doc, WithoutFlow(doc, FlowId));
+
+        Assert.True(InterfaceExists(doc, portId));
+    }
+
+    [Fact]
+    public void APortSharedByTwoFlowsAndALinkStaysWhenOneFlowGoes()
+    {
+        var doc = FpbJsonToCaex.Convert(LoadTestData("Temperieren.json")).Value;
+        var flow = FlowLink(doc);
+        var port = (ExternalInterfaceType)flow.AInterface;
+        var holder = (InternalElementType)flow.CAEXParent;
+        var second = holder.InternalLink.Append("SecondFlow");
+        second.ID = "{00000000-0000-4000-8000-0000000000f2}";
+        second.AInterface = port;
+        second.BInterface = flow.BInterface;
+        var tank = doc.CAEXFile.InstanceHierarchy.Append("Plant").InternalElement.Append("Tank");
+        var toPort = tank.InternalLink.Append("TankToPort");
+        toPort.AInterface = tank.ExternalInterface.Append("ToPort");
+        toPort.BInterface = port;
+        var portId = port.ID;
+
+        FpbJsonToCaex.UpdateInPlace(doc, WithoutFlow(doc, FlowId));
+
+        Assert.Throws<InvalidOperationException>(() => FlowLink(doc));
+        Assert.Contains("SecondFlow", LinkNames(holder));
+        Assert.True(InterfaceExists(doc, portId));
+        Assert.True(InterfaceExists(doc, holder.InternalLink.First(l => l.Name == "SecondFlow").RefPartnerSideA));
+    }
+
+    [Fact]
+    public void APortGoesWithItsFlowWhenNothingElseUsesIt()
+    {
+        var doc = FpbJsonToCaex.Convert(LoadTestData("Temperieren.json")).Value;
+        var portId = ((ExternalInterfaceType)FlowLink(doc).AInterface).ID;
+
+        FpbJsonToCaex.UpdateInPlace(doc, WithoutFlow(doc, FlowId));
+
+        Assert.False(InterfaceExists(doc, portId));
+    }
 }
