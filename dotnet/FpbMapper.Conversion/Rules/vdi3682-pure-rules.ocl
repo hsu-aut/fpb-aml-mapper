@@ -1,5 +1,5 @@
 -- FPD validation rule set — Phase 1 (PURE), executable by OCL.NET.
--- The 26 structural constraints that map directly to OCL over the FPD model AND
+-- The 23 structural constraints that map directly to OCL over the FPD model AND
 -- are executable against the CAEX serialization today (cardinalities, connection
 -- typing, naming, reference resolution, semantics).
 -- Informed by VDI 3682 Parts 1 and 2 plus tool-level conventions for the AML
@@ -17,10 +17,11 @@ context FPD_Process inv SystemLimitCardinality:
   self.containedElement->select(e | e.oclIsKindOf(FPD_SystemLimit))->size() = 1
 
 context FPD_Process inv StateMinimumCardinality:
-  self.containedElement->select(e | e.oclIsKindOf(FPD_State))->size() >= 2
+  -- only for a process that has begun (031): an empty one is not started yet
+  self.containedElement->select(e | e.oclIsKindOf(FPD_State) or e.oclIsKindOf(FPD_ProcessOperator) or e.oclIsKindOf(FPD_TechnicalResource))->notEmpty() implies self.containedElement->select(e | e.oclIsKindOf(FPD_State))->size() >= 2
 
 context FPD_Process inv ProcessOperatorMinimumCardinality:
-  self.containedElement->select(e | e.oclIsKindOf(FPD_ProcessOperator))->size() >= 1
+  self.containedElement->select(e | e.oclIsKindOf(FPD_State) or e.oclIsKindOf(FPD_ProcessOperator) or e.oclIsKindOf(FPD_TechnicalResource))->notEmpty() implies self.containedElement->select(e | e.oclIsKindOf(FPD_ProcessOperator))->size() >= 1
 
 context FPD_Flow inv FlowEndpointsTyped:
   (source.oclIsKindOf(FPD_State) and target.oclIsKindOf(FPD_ProcessOperator)) or
@@ -48,22 +49,14 @@ context FPD_ProcessOperator inv NoMixedFlowTypes:
 context FPD_Project inv UniqueIdentifiers:
   let allElements = self.process.containedElement->asSet() in allElements->forAll(e1, e2 | (e1 <> e2 and e1.identification.uniqueIdent->notEmpty() and e1.refObj <> e2.identification.uniqueIdent and e2.refObj <> e1.identification.uniqueIdent) implies e1.identification.uniqueIdent <> e2.identification.uniqueIdent)
 
-context FPD_ProcessOperator inv ProcessOperatorNamed:
-  (self.identification.longName->notEmpty() and self.identification.longName.size() > 0) or (self.identification.shortName->notEmpty() and self.identification.shortName.size() > 0) or (self.name->notEmpty())
-
-context FPD_State inv StateNamed:
-  self.identification.longName->notEmpty() or self.identification.shortName->notEmpty() or self.name->notEmpty()
-
-context FPD_TechnicalResource inv TechnicalResourceNamed:
-  self.identification.longName->notEmpty() or self.identification.shortName->notEmpty() or self.name->notEmpty()
-
 context FPD_Process inv ProcessNamed:
   self.name->notEmpty()
 
 context FPD_Object inv LongNameMandatory:
-  -- Name fallback (like D3/D4): FPB.js populates shortName/name but leaves
-  -- longName empty on every element — without the fallback this rule floods
-  -- every model with one finding per element.
+  -- Name fallback: FPB.js populates shortName/name but leaves longName empty
+  -- on every element; without the fallback this rule floods every model with
+  -- one finding per element. D3 to D5 (operator, state, resource named) are
+  -- the same condition and merged into this rule (031).
   (self.identification.longName->notEmpty() and self.identification.longName.size() > 0) or (self.identification.shortName->notEmpty() and self.identification.shortName.size() > 0) or self.name->notEmpty()
 
 context FPD_Object inv VersionRevisionPresent:
@@ -95,4 +88,6 @@ context FPD_Object inv NoOrphanedElements:
   (self.oclIsKindOf(FPD_State) or self.oclIsKindOf(FPD_ProcessOperator) or self.oclIsKindOf(FPD_TechnicalResource)) implies (self.incomingConnections->notEmpty() or self.outgoingConnections->notEmpty())
 
 context FPD_Connection inv SourceTargetSameProcess:
-  (self.source->notEmpty() and self.target->notEmpty()) implies self.source.process = self.target.process
+  -- only between FPD elements (031): a link to an element outside any FPD
+  -- (a plant structure, 016f E4) is a reference, not a flow
+  (self.source->notEmpty() and self.target->notEmpty() and self.source.process->notEmpty() and self.target.process->notEmpty()) implies self.source.process = self.target.process

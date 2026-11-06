@@ -105,9 +105,10 @@ public static class CoverageReportBuilder
         // ── D — Identification & Naming ─────────────────────────────────────
         ("D1", "uniqueIdent-Unikalität",           "Identity",    "UniqueIdentifiers",               null),
         ("D2", "IDs unikal in Hierarchie",         "Identity",    "UniqueIdsInHierarchy",            "Phase 2: cross-IH scope"),
-        ("D3", "PO benannt",                       "Identity",    "ProcessOperatorNamed",            null),
-        ("D4", "State benannt",                    "Identity",    "StateNamed",                      null),
-        ("D5", "TR benannt",                       "Identity",    "TechnicalResourceNamed",          null),
+        // 031: D3 to D5 are the condition of D7 and run as its invariant
+        ("D3", "PO benannt",                       "Identity",    "LongNameMandatory",               "in D7 aufgegangen (031)"),
+        ("D4", "State benannt",                    "Identity",    "LongNameMandatory",               "in D7 aufgegangen (031)"),
+        ("D5", "TR benannt",                       "Identity",    "LongNameMandatory",               "in D7 aufgegangen (031)"),
         ("D6", "Process benannt",                  "Identity",    "ProcessNamed",                    null),
         ("D7", "longName pflicht",                 "Identity",    "LongNameMandatory",               null),
         ("D8", "Version+Revision vorhanden",       "Identity",    "VersionRevisionPresent",          null),
