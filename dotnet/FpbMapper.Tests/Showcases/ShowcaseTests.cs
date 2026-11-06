@@ -140,8 +140,11 @@ public class ShowcaseTests
         sub.AddCharacteristic(platte, "AuslegungsLeistung", "Auslegungs-Wärmeleistung", "250", "kW");
         sub.AddCharacteristic(platte, "PlattenAnzahl",      "Anzahl Platten",            "40",  "Stk");
 
+        // VDI 3682 Blatt 1, 4.1: a flow joins a state and an operator, never two operators (031)
+        var medium = sub.AddProduct("Heizmedium-Ausgang");
         sub.AddFlow(bHot,    preHeat);
-        sub.AddFlow(preHeat, platte);
+        sub.AddFlow(preHeat, medium);
+        sub.AddFlow(medium,  platte);
         sub.AddFlow(bCold,   platte);
         sub.AddFlow(platte,  bHeated);
         sub.AddFlow(platte,  bCooled);
@@ -149,25 +152,29 @@ public class ShowcaseTests
         // Layer 2 — decomposition of "Heizmedium aufbereiten"
         var sub2 = sub.Decompose(preHeat, "Heizmedium aufbereiten Detail");
         var bIn   = sub2.AddBoundaryFromParent(bHot, "fpb:Product", "Heizmedium-Eingang");
-        var bOut  = sub2.AddProduct("Heizmedium-Ausgang");
+        var bOut  = sub2.AddBoundaryFromParent(medium, "fpb:Product", "Heizmedium-Ausgang");
         var pCtrl = sub2.AddProcessOperator("Druckregelung");
         var tSet  = sub2.AddProcessOperator("Temperatur-Sollwert prüfen");
         sub2.AddCharacteristic(tSet, "Sollwert", "Eingestellter Temperatursollwert", "120", "°C");
 
+        var druck = sub2.AddProduct("Geregelter Druck");
         sub2.AddFlow(bIn,   pCtrl);
-        sub2.AddFlow(pCtrl, tSet);
+        sub2.AddFlow(pCtrl, druck);
+        sub2.AddFlow(druck, tSet);
         sub2.AddFlow(tSet,  bOut);
 
         // Layer 3 — decomposition of "Druckregelung"
         var sub3 = sub2.Decompose(pCtrl, "Druckregelung Detail");
         var bRoh   = sub3.AddBoundaryFromParent(bIn, "fpb:Product", "Roh-Druck");
-        var bGeregelt = sub3.AddProduct("Geregelter Druck");
+        var bGeregelt = sub3.AddBoundaryFromParent(druck, "fpb:Product", "Geregelter Druck");
         var messen = sub3.AddProcessOperator("Druckmessung");
         var stellen = sub3.AddProcessOperator("Stellventil betätigen");
         sub3.AddCharacteristic(stellen, "MaxStellgeschwindigkeit", "Maximale Stellgeschwindigkeit", "5", "%/s");
 
-        sub3.AddFlow(bRoh,   messen);
-        sub3.AddFlow(messen, stellen);
+        var istwert = sub3.AddInformation("Druck-Istwert");
+        sub3.AddFlow(bRoh,    messen);
+        sub3.AddFlow(messen,  istwert);
+        sub3.AddFlow(istwert, stellen);
         sub3.AddFlow(stellen, bGeregelt);
 
         return sb;
@@ -234,20 +241,25 @@ public class ShowcaseTests
         sub.AddCharacteristic(dosieren, "Genauigkeit", "Dosierungs-Genauigkeit", "0.5", "%");
         sub.AddCharacteristic(mischen,  "Drehzahl",    "Mischer-Drehzahl",       "400", "rpm");
 
+        // VDI 3682 Blatt 1, 4.1: a flow joins a state and an operator, never two operators (031)
+        var dosiert = sub.AddProduct("Dosierter Wirkstoff");
         sub.AddFlow(bWk,       dosieren);
-        sub.AddFlow(dosieren,  mischen);
+        sub.AddFlow(dosieren,  dosiert);
+        sub.AddFlow(dosiert,   mischen);
         sub.AddFlow(bHs,       mischen);
         sub.AddFlow(mischen,   bLs);
 
         // Layer 2 — decompose "Wirkstoff dosieren"
         var sub2 = sub.Decompose(dosieren, "Dosieren Detail");
         var bRoh    = sub2.AddBoundaryFromParent(bWk, "fpb:Product", "Roh-Wirkstoff");
-        var bDosis  = sub2.AddProduct("Dosierter Wirkstoff");
+        var bDosis  = sub2.AddBoundaryFromParent(dosiert, "fpb:Product", "Dosierter Wirkstoff");
         var wiegen  = sub2.AddProcessOperator("Wiegen");
         var uebergeb = sub2.AddProcessOperator("Übergeben");
 
+        var gewogen = sub2.AddProduct("Gewogener Wirkstoff");
         sub2.AddFlow(bRoh,     wiegen);
-        sub2.AddFlow(wiegen,   uebergeb);
+        sub2.AddFlow(wiegen,   gewogen);
+        sub2.AddFlow(gewogen,  uebergeb);
         sub2.AddFlow(uebergeb, bDosis);
 
         return sb;
@@ -336,36 +348,56 @@ public class ShowcaseTests
         var montieren = sub.AddProcessOperator("Montieren");
         sub.AddCharacteristic(montieren, "Anziehmoment", "Solldrehmoment am Anziehen", "12", "Nm");
 
+        // VDI 3682 Blatt 1, 4.1: a flow joins a state and an operator, never two operators (031)
+        var gefraest = sub.AddProduct("Gefrästes Werkstück");
         sub.AddFlow(bRoh,      fraesen);
-        sub.AddFlow(fraesen,   montieren);
+        sub.AddFlow(fraesen,   gefraest);
+        sub.AddFlow(gefraest,  montieren);
         sub.AddFlow(montieren, bBau);
 
         // Layer 2 — decompose "Fräsen"
         var subFraes = sub.Decompose(fraesen, "Fräsen Detail");
         var bWst = subFraes.AddBoundaryFromParent(bRoh, "fpb:Product", "Eingespanntes Werkstück");
-        var bFin = subFraes.AddProduct("Gefrästes Werkstück");
+        var bFin = subFraes.AddBoundaryFromParent(gefraest, "fpb:Product", "Gefrästes Werkstück");
         var einspannen = subFraes.AddProcessOperator("Werkstück einspannen");
         var bahnplan   = subFraes.AddProcessOperator("Bahnplanung");
         var schrupp    = subFraes.AddProcessOperator("Schruppfräsen");
         var schlicht   = subFraes.AddProcessOperator("Schlichtfräsen");
         var pruefen    = subFraes.AddProcessOperator("Maßprüfen");
 
+        // the workpiece goes to milling, the clamping position to path planning,
+        // the milling path from there to milling
+        var gespannt       = subFraes.AddProduct("Gespanntes Werkstück");
+        var spannlage      = subFraes.AddInformation("Spannlage");
+        var fraesbahn      = subFraes.AddInformation("Fräsbahn");
+        var vorgefraest    = subFraes.AddProduct("Vorgefrästes Werkstück");
+        var fertiggefraest = subFraes.AddProduct("Fertiggefrästes Werkstück");
+
         subFraes.AddFlow(bWst, einspannen);
-        subFraes.AddFlow(einspannen, bahnplan);
-        subFraes.AddFlow(bahnplan, schrupp);
-        subFraes.AddFlow(schrupp, schlicht);
-        subFraes.AddFlow(schlicht, pruefen);
+        subFraes.AddFlow(einspannen, gespannt);
+        subFraes.AddFlow(einspannen, spannlage);
+        subFraes.AddFlow(spannlage, bahnplan);
+        subFraes.AddFlow(bahnplan, fraesbahn);
+        subFraes.AddFlow(gespannt, schrupp);
+        subFraes.AddFlow(fraesbahn, schrupp);
+        subFraes.AddFlow(schrupp, vorgefraest);
+        subFraes.AddFlow(vorgefraest, schlicht);
+        subFraes.AddFlow(schlicht, fertiggefraest);
+        subFraes.AddFlow(fertiggefraest, pruefen);
         subFraes.AddFlow(pruefen, bFin);
 
         // Layer 2 — decompose "Montieren"
         var subMont = sub.Decompose(montieren, "Montieren Detail");
-        var bMontIn  = subMont.AddBoundaryFromParent(bRoh, "fpb:Product", "Gefrästes Werkstück (Eingang)");
+        // the milled workpiece is the same state as the output of "Fräsen" (it shared the id of the blank before)
+        var bMontIn  = subMont.AddBoundaryFromParent(gefraest, "fpb:Product", "Gefrästes Werkstück");
         var bMontOut = subMont.AddBoundaryFromParent(bBau, "fpb:Product", "Fertiges Bauteil");
         var positionieren = subMont.AddProcessOperator("Position einnehmen");
         var schrauben     = subMont.AddProcessOperator("Schraubvorgang");
 
+        var positioniert = subMont.AddProduct("Positioniertes Bauteil");
         subMont.AddFlow(bMontIn,        positionieren);
-        subMont.AddFlow(positionieren,  schrauben);
+        subMont.AddFlow(positionieren,  positioniert);
+        subMont.AddFlow(positioniert,   schrauben);
         subMont.AddFlow(schrauben,      bMontOut);
 
         return sb;
