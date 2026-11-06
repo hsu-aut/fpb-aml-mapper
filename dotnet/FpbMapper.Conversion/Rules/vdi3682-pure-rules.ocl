@@ -14,7 +14,8 @@ context FPD_Project inv ProjectMinimumProcess:
   self.process->size() >= 1
 
 context FPD_Process inv SystemLimitCardinality:
-  self.containedElement->select(e | e.oclIsKindOf(FPD_SystemLimit))->size() = 1
+  -- at most one; exactly one once the process has begun (031, like FPB.js)
+  self.containedElement->select(e | e.oclIsKindOf(FPD_SystemLimit))->size() <= 1 and (self.containedElement->select(e | e.oclIsKindOf(FPD_State) or e.oclIsKindOf(FPD_ProcessOperator) or e.oclIsKindOf(FPD_TechnicalResource))->notEmpty() implies self.containedElement->select(e | e.oclIsKindOf(FPD_SystemLimit))->size() = 1)
 
 context FPD_Process inv StateMinimumCardinality:
   -- only for a process that has begun (031): an empty one is not started yet
@@ -24,8 +25,11 @@ context FPD_Process inv ProcessOperatorMinimumCardinality:
   self.containedElement->select(e | e.oclIsKindOf(FPD_State) or e.oclIsKindOf(FPD_ProcessOperator) or e.oclIsKindOf(FPD_TechnicalResource))->notEmpty() implies self.containedElement->select(e | e.oclIsKindOf(FPD_ProcessOperator))->size() >= 1
 
 context FPD_Flow inv FlowEndpointsTyped:
-  (source.oclIsKindOf(FPD_State) and target.oclIsKindOf(FPD_ProcessOperator)) or
-  (source.oclIsKindOf(FPD_ProcessOperator) and target.oclIsKindOf(FPD_State))
+  -- only between FPD elements (031): a link to an element outside any FPD
+  -- (016f E4) starts at a flow interface but is a reference, not a flow
+  (self.source.process->notEmpty() and self.target.process->notEmpty()) implies
+  ((source.oclIsKindOf(FPD_State) and target.oclIsKindOf(FPD_ProcessOperator)) or
+  (source.oclIsKindOf(FPD_ProcessOperator) and target.oclIsKindOf(FPD_State)))
 
 context FPD_Flow inv NoStateToStateFlow:
   not (source.oclIsKindOf(FPD_State) and target.oclIsKindOf(FPD_State))
@@ -34,8 +38,9 @@ context FPD_Flow inv NoProcessOperatorToProcessOperatorFlow:
   not (source.oclIsKindOf(FPD_ProcessOperator) and target.oclIsKindOf(FPD_ProcessOperator))
 
 context FPD_Usage inv UsageEndpointsTyped:
-  (source.oclIsKindOf(FPD_ProcessOperator) and target.oclIsKindOf(FPD_TechnicalResource)) or
-  (source.oclIsKindOf(FPD_TechnicalResource) and target.oclIsKindOf(FPD_ProcessOperator))
+  (self.source.process->notEmpty() and self.target.process->notEmpty()) implies
+  ((source.oclIsKindOf(FPD_ProcessOperator) and target.oclIsKindOf(FPD_TechnicalResource)) or
+  (source.oclIsKindOf(FPD_TechnicalResource) and target.oclIsKindOf(FPD_ProcessOperator)))
 
 context FPD_Process inv NoDuplicateConnections:
   self.connections->forAll(c1, c2 | (c1 <> c2 and c1.source = c2.source and c1.target = c2.target) implies c1.oclType() <> c2.oclType())
@@ -46,8 +51,10 @@ context FPD_Flow inv FlowDirected:
 context FPD_ProcessOperator inv NoMixedFlowTypes:
   let outFlows = self.outgoingConnections->select(c | c.oclIsKindOf(FPD_Flow)) in outFlows->forAll(f1, f2 | f1.oclType() = f2.oclType())
 
-context FPD_Project inv UniqueIdentifiers:
-  let allElements = self.process.containedElement->asSet() in allElements->forAll(e1, e2 | (e1 <> e2 and e1.identification.uniqueIdent->notEmpty() and e1.refObj <> e2.identification.uniqueIdent and e2.refObj <> e1.identification.uniqueIdent) implies e1.identification.uniqueIdent <> e2.identification.uniqueIdent)
+context FPD_Object inv UniqueIdentifiers:
+  -- per element (031): every element that shares its unique ID is reported,
+  -- not the project; copies of a boundary state (refObj) are the same object
+  ((self.oclIsKindOf(FPD_State) or self.oclIsKindOf(FPD_ProcessOperator) or self.oclIsKindOf(FPD_TechnicalResource)) and self.identification.uniqueIdent->notEmpty()) implies self.project.containedElement->select(e | e <> self and (e.oclIsKindOf(FPD_State) or e.oclIsKindOf(FPD_ProcessOperator) or e.oclIsKindOf(FPD_TechnicalResource)) and e.identification.uniqueIdent = self.identification.uniqueIdent and e.refObj <> self.identification.uniqueIdent and self.refObj <> e.identification.uniqueIdent)->isEmpty()
 
 context FPD_Process inv ProcessNamed:
   self.name->notEmpty()
