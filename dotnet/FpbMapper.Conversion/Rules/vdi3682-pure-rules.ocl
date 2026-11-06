@@ -56,11 +56,13 @@ context FPD_Object inv LongNameMandatory:
   -- Name fallback: FPB.js populates shortName/name but leaves longName empty
   -- on every element; without the fallback this rule floods every model with
   -- one finding per element. D3 to D5 (operator, state, resource named) are
-  -- the same condition and merged into this rule (031).
-  (self.identification.longName->notEmpty() and self.identification.longName.size() > 0) or (self.identification.shortName->notEmpty() and self.identification.shortName.size() > 0) or self.name->notEmpty()
+  -- the same condition and merged into this rule (031). Only states,
+  -- operators and resources carry an identification (Blatt 2, 5.1), not the
+  -- system limit the binding also counts as an object (031, corpus test).
+  (self.oclIsKindOf(FPD_State) or self.oclIsKindOf(FPD_ProcessOperator) or self.oclIsKindOf(FPD_TechnicalResource)) implies ((self.identification.longName->notEmpty() and self.identification.longName.size() > 0) or (self.identification.shortName->notEmpty() and self.identification.shortName.size() > 0) or self.name->notEmpty())
 
 context FPD_Object inv VersionRevisionPresent:
-  self.identification.versionNumber->size() = 1 and self.identification.revisionNumber->size() = 1
+  (self.oclIsKindOf(FPD_State) or self.oclIsKindOf(FPD_ProcessOperator) or self.oclIsKindOf(FPD_TechnicalResource)) implies (self.identification.versionNumber->size() = 1 and self.identification.revisionNumber->size() = 1)
 
 context FPD_Object inv RefObjResolvable:
   self.refObj->notEmpty() implies self.project.containedElement->exists(e | e.identification.uniqueIdent = self.refObj)
