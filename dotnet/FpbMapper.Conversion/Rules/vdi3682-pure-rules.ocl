@@ -76,7 +76,11 @@ context FPD_ProcessOperator inv RefProcessResolvable:
   self.refProcess->notEmpty() implies self.project.process->exists(p | p.id = self.refProcess)
 
 context FPD_Object inv AllReferencesResolvable:
-  Sequence{self.refObj, self.refBaseObj, self.refAspectObj, self.refDetailObj, self.refAbstractObj}->select(r | r->notEmpty())->forAll(r | self.project.containedElement->exists(e | e.identification.uniqueIdent = r))
+  -- project.containedElement spans every instance hierarchy of the document. A
+  -- reference resolves against an FPD uniqueIdent or, as an xs:IDREF, against the
+  -- CAEX ID of any element, so a link into a non-FPD hierarchy (e.g. refBaseObj
+  -- to a plant structure) is resolvable.
+  Sequence{self.refObj, self.refBaseObj, self.refAspectObj, self.refDetailObj, self.refAbstractObj}->select(r | r->notEmpty())->forAll(r | self.project.containedElement->exists(e | e.identification.uniqueIdent = r or e.id = r))
 
 context FPD_ProcessOperator inv ProcessOperatorHasIO:
   self.incomingConnections->select(c | c.oclIsKindOf(FPD_Flow))->size() >= 1 and self.outgoingConnections->select(c | c.oclIsKindOf(FPD_Flow))->size() >= 1
