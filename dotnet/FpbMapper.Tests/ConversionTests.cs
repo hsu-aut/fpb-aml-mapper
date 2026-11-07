@@ -1849,6 +1849,41 @@ public class ValidationTests
         Assert.Contains(result.Warnings, w => w.Contains("no SystemLimit"));
     }
 
+    // FPB.js test round 2026-11-07: an unnamed system limit gave the process an
+    // empty name and the system limit the name "SystemLimit_"
+    [Fact]
+    public void UnnamedSystemLimit_And_UnnamedOperator_GetFallbackNames()
+    {
+        var json = """
+            [
+              {"$type":"fpb:Project","name":"Test","entryPoint":"proc-1"},
+              {
+                "process":{"$type":"fpb:Process","id":"proc-1","consistsOfProcesses":["po-1"]},
+                "elementDataInformation":[
+                  {"$type":"fpb:SystemLimit","id":"sl-1","name":""},
+                  {"$type":"fpb:ProcessOperator","id":"po-1","name":"","decomposedView":"po-1"}
+                ],
+                "elementVisualInformation":[]
+              },
+              {
+                "process":{"$type":"fpb:Process","id":"po-1","isDecomposedProcessOperator":"po-1","parent":"proc-1"},
+                "elementDataInformation":[
+                  {"$type":"fpb:SystemLimit","id":"sl-2","name":""}
+                ],
+                "elementVisualInformation":[]
+              }
+            ]
+            """;
+
+        var doc = FpbJsonToCaex.Convert(json).Value;
+        var ih = doc.CAEXFile.InstanceHierarchy.First();
+        var names = ih.InternalElement
+            .Select(p => (p.Name, p.InternalElement.First(e => (e.RefBaseSystemUnitPath ?? "").EndsWith("FPD_SystemLimit")).Name))
+            .ToList();
+
+        Assert.Equal(new[] { ("Process", "SystemLimit_Process"), ("Process", "SystemLimit_Process") }, names);
+    }
+
     [Fact]
     public void MissingEntryPoint_Throws()
     {

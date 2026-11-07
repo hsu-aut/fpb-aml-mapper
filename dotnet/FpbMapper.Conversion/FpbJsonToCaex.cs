@@ -1335,7 +1335,7 @@ public static class FpbJsonToCaex
         // convention (sub-process FPB ID == parent-PO FPB ID) is unaffected because
         // CaexToFpbJson's post-processing salvages it from refObj regardless.
         procIE.ID = DeriveSubProcessId(StripBraces(parentPo.ID));
-        procIE.Name = parentPo.Name ?? "Sub-Process";
+        procIE.Name = string.IsNullOrWhiteSpace(parentPo.Name) ? "Sub-Process" : parentPo.Name;
         fpdIH.Insert(procIE);
         // refObj must be brace-free (= the parent PO's uniqueIdent, per the AML-Editor
         // convention and green-field Convert). Earlier this stored the braced AML ID,
@@ -1711,7 +1711,10 @@ public static class FpbJsonToCaex
                 if (po != null) { processName = po.Name; break; }
             }
         }
-        processName ??= slData?.Name ?? "Process";
+        // an unnamed operator or system limit: the next name, else "Process"
+        // (an empty name gave "SystemLimit_" and an IE named after its class)
+        if (string.IsNullOrWhiteSpace(processName)) processName = slData?.Name;
+        if (string.IsNullOrWhiteSpace(processName)) processName = "Process";
 
         // Create FPD_Process via CreateClassInstance
         var procIE = CreateInstance(sucLookup, "FPD_Process");
