@@ -187,8 +187,8 @@ public class ShowcaseTests
     public void Generate_Showcase_B_Pharma_MultiIh()
     {
         // Two independent FPD JSONs are mapped sequentially into the same
-        // CAEXDocument. The shared Mixer_1 TR carries the same uniqueIdent on
-        // both sides so a downstream consumer can correlate them.
+        // CAEXDocument. Mixer_1 appears in both views with the same EquipmentId
+        // so a downstream consumer can correlate them.
         var jsonBatch    = BuildPharmaBatch().ToJson();
         var jsonCleaning = BuildPharmaCleaning().ToJson();
 
@@ -196,8 +196,7 @@ public class ShowcaseTests
         var ihBatch = doc.CAEXFile.InstanceHierarchy.First();
         ihBatch.Name = "FPD_Batch_Production";
 
-        var ihCleaning = FpbJsonToCaex.CreateEmptyFpdInstanceHierarchy(doc, "FPD_Cleaning");
-        FpbJsonToCaex.UpdateInPlace(doc, jsonCleaning, ihCleaning);
+        var ihCleaning = AppendView(doc, jsonCleaning, "FPD_Cleaning");
 
         WriteAml(doc, "Showcase-B-PharmaChargeUndReinigung.aml");
 
@@ -208,6 +207,43 @@ public class ShowcaseTests
         var backCleaning = CaexToFpbJson.Convert(doc, ihCleaning);
         Assert.False(string.IsNullOrWhiteSpace(backBatch.Value));
         Assert.False(string.IsNullOrWhiteSpace(backCleaning.Value));
+
+        // the second view carries its process, not an empty placeholder
+        var cleaning = NamesIn(doc.CAEXFile.InstanceHierarchy["FPD_Cleaning"]!);
+        Assert.Contains("Spülen", cleaning);
+        Assert.Contains("Vorspülen", cleaning);
+        Assert.Contains("Nachspülen", cleaning);
+        Assert.DoesNotContain("NewProcess", cleaning);
+    }
+
+    /// <summary>
+    /// Map a second FPD view into the document. ImportInto appends a fresh hierarchy.
+    /// UpdateInPlace on an empty view does not: it edits a view by the ids FPB.js
+    /// loaded from it, the ids of a new builder match none, and the content was lost.
+    /// </summary>
+    private static InstanceHierarchyType AppendView(CAEXDocument doc, string json, string name)
+    {
+        var result = FpbJsonToCaex.ImportInto(doc, json);
+        Assert.Empty(result.Warnings);
+        var ih = doc.CAEXFile.InstanceHierarchy.Last();
+        ih.Name = name;
+        return ih;
+    }
+
+    /// <summary>The names of all internal elements below a hierarchy.</summary>
+    private static List<string> NamesIn(InstanceHierarchyType ih)
+    {
+        var names = new List<string>();
+        void Walk(IEnumerable<InternalElementType> ies)
+        {
+            foreach (var ie in ies)
+            {
+                names.Add(ie.Name);
+                Walk(ie.InternalElement);
+            }
+        }
+        Walk(ih.InternalElement);
+        return names;
     }
 
     private static ShowcaseBuilder BuildPharmaBatch()
@@ -287,10 +323,15 @@ public class ShowcaseTests
         var hauptr   = sub.AddProcessOperator("Hauptreinigen");
         var nachsp   = sub.AddProcessOperator("Nachspülen");
 
-        sub.AddFlow(bIn,      vorspuel);
-        sub.AddFlow(vorspuel, hauptr);
-        sub.AddFlow(hauptr,   nachsp);
-        sub.AddFlow(nachsp,   bOut);
+        // VDI 3682 Blatt 1, 4.1: a flow joins a state and an operator, never two operators (031)
+        var teilverschmutzt = sub.AddProduct("Teilverschmutzte Lösung");
+        var verschmutzt     = sub.AddProduct("Verschmutzte Lösung");
+        sub.AddFlow(bIn,             vorspuel);
+        sub.AddFlow(vorspuel,        teilverschmutzt);
+        sub.AddFlow(teilverschmutzt, hauptr);
+        sub.AddFlow(hauptr,          verschmutzt);
+        sub.AddFlow(verschmutzt,     nachsp);
+        sub.AddFlow(nachsp,          bOut);
 
         return sb;
     }
@@ -306,17 +347,18 @@ public class ShowcaseTests
         var ihMain = doc.CAEXFile.InstanceHierarchy.First();
         ihMain.Name = "FPD_Assembly";
 
-        // Second FPD IH with a small fasteners-stock process. The Befestigungs-
-        // teile boundary state on the main side carries the same uniqueIdent
-        // as the fasteners-stock output state, so the cross-IH reference is
-        // resolvable by id (the AML editor highlights the link).
-        var ihStock = FpbJsonToCaex.CreateEmptyFpdInstanceHierarchy(doc, "FPD_Fasteners_Stock");
-        FpbJsonToCaex.UpdateInPlace(doc, BuildFastenersStock().ToJson(), ihStock);
+        // Second FPD view with a small fasteners-stock process
+        AppendView(doc, BuildFastenersStock().ToJson(), "FPD_Fasteners_Stock");
 
         WriteAml(doc, "Showcase-C-CncRobotikMontage.aml");
 
         var back = CaexToFpbJson.Convert(doc, ihMain);
         Assert.False(string.IsNullOrWhiteSpace(back.Value));
+
+        var stock = NamesIn(doc.CAEXFile.InstanceHierarchy["FPD_Fasteners_Stock"]!);
+        Assert.Contains("Pick & Place", stock);
+        Assert.Contains("Bereitgestellte Befestigungsteile", stock);
+        Assert.DoesNotContain("NewProcess", stock);
     }
 
     private static ShowcaseBuilder BuildCncRobotik()
