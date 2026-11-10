@@ -157,7 +157,7 @@ public class ShowcaseTests
         var tSet  = sub2.AddProcessOperator("Temperatur-Sollwert prüfen");
         sub2.AddCharacteristic(tSet, "Sollwert", "Eingestellter Temperatursollwert", "120", "°C");
 
-        var druck = sub2.AddProduct("Geregelter Druck");
+        var druck = sub2.AddProduct("Heizmedium druckgeregelt");
         sub2.AddFlow(bIn,   pCtrl);
         sub2.AddFlow(pCtrl, druck);
         sub2.AddFlow(druck, tSet);
@@ -165,17 +165,24 @@ public class ShowcaseTests
 
         // Layer 3 — decomposition of "Druckregelung"
         var sub3 = sub2.Decompose(pCtrl, "Druckregelung Detail");
-        var bRoh   = sub3.AddBoundaryFromParent(bIn, "fpb:Product", "Roh-Druck");
-        var bGeregelt = sub3.AddBoundaryFromParent(druck, "fpb:Product", "Geregelter Druck");
+        // The medium runs through: measuring passes it on next to the measured
+        // value, the valve takes both. Pressure is a property of the medium, not
+        // a product of its own, and a product does not vanish into information
+        // (VDI 3682 Blatt 1, 4.1, system limit as balance limit; rule G6).
+        var bRoh   = sub3.AddBoundaryFromParent(bIn, "fpb:Product", "Heizmedium ungeregelt");
+        var bGeregelt = sub3.AddBoundaryFromParent(druck, "fpb:Product", "Heizmedium druckgeregelt");
         var messen = sub3.AddProcessOperator("Druckmessung");
         var stellen = sub3.AddProcessOperator("Stellventil betätigen");
         sub3.AddCharacteristic(stellen, "MaxStellgeschwindigkeit", "Maximale Stellgeschwindigkeit", "5", "%/s");
 
+        var gemessen = sub3.AddProduct("Heizmedium gemessen");
         var istwert = sub3.AddInformation("Druck-Istwert");
-        sub3.AddFlow(bRoh,    messen);
-        sub3.AddFlow(messen,  istwert);
-        sub3.AddFlow(istwert, stellen);
-        sub3.AddFlow(stellen, bGeregelt);
+        sub3.AddFlow(bRoh,     messen);
+        sub3.AddFlow(messen,   gemessen);
+        sub3.AddFlow(messen,   istwert);
+        sub3.AddFlow(gemessen, stellen);
+        sub3.AddFlow(istwert,  stellen);
+        sub3.AddFlow(stellen,  bGeregelt);
 
         return sb;
     }
