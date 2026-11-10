@@ -11,10 +11,10 @@ namespace FpbMapper.Tests;
 public class CoverageReportTests
 {
     [Fact]
-    public void Build_ReportsExactly60CataloguedRules()
+    public void Build_ReportsExactly61CataloguedRules()
     {
         var report = CoverageReportBuilder.Build(DateTimeOffset.UtcNow);
-        Assert.Equal(60, report.Rules.Count);
+        Assert.Equal(61, report.Rules.Count);
     }
 
     [Fact]
@@ -23,12 +23,12 @@ public class CoverageReportTests
         var report = CoverageReportBuilder.Build(DateTimeOffset.UtcNow);
         var totals = report.Totals;
 
-        Assert.Equal(26, totals["PURE_OCL_LIVE"]);
+        Assert.Equal(27, totals["PURE_OCL_LIVE"]);
         Assert.Equal(4,  totals["PHASE2_OCL_PENDING"]);
         Assert.Equal(11, totals["OPEN_PLUGIN_GEOMETRY"]);
         Assert.Equal(4,  totals["OPEN_MAPPER_SCHEMA"]);
         Assert.Equal(15, totals["OPEN_PHASE2_OR_INFORMATIVE"]);
-        Assert.Equal(60, totals["TOTAL_CATALOGUE"]);
+        Assert.Equal(61, totals["TOTAL_CATALOGUE"]);
     }
 
     // (Intentionally no test in the other direction: many catalogue entries

@@ -1,5 +1,5 @@
 -- FPD validation rule set — Phase 1 (PURE), executable by OCL.NET.
--- The 23 structural constraints that map directly to OCL over the FPD model AND
+-- The 24 structural constraints that map directly to OCL over the FPD model AND
 -- are executable against the CAEX serialization today (cardinalities, connection
 -- typing, naming, reference resolution, semantics).
 -- Informed by VDI 3682 Parts 1 and 2 plus tool-level conventions for the AML
@@ -86,6 +86,14 @@ context FPD_Object inv AllReferencesResolvable:
 
 context FPD_ProcessOperator inv ProcessOperatorHasIO:
   self.incomingConnections->select(c | c.oclIsKindOf(FPD_Flow))->size() >= 1 and self.outgoingConnections->select(c | c.oclIsKindOf(FPD_Flow))->size() >= 1
+
+context FPD_ProcessOperator inv ProductBalance:
+  -- G6 (2026-11-10, a note): a product that goes into an operator also comes
+  -- out, and none comes out of nothing (VDI 3682 Blatt 1, 4.1, system limit as
+  -- balance limit for products). Only for an operator with an input and an
+  -- output; the rest is ProcessOperatorHasIO (G1). A block has to start with
+  -- "context", the plugin splits the file at blank lines.
+  (self.incomingConnections->select(c | c.oclIsKindOf(FPD_Flow))->notEmpty() and self.outgoingConnections->select(c | c.oclIsKindOf(FPD_Flow))->notEmpty()) implies (self.incomingConnections->select(c | c.oclIsKindOf(FPD_Flow))->exists(c | c.source.oclIsKindOf(FPD_Product)) = self.outgoingConnections->select(c | c.oclIsKindOf(FPD_Flow))->exists(c | c.target.oclIsKindOf(FPD_Product)))
 
 context FPD_State inv StateHasConcreteType:
   Sequence{FPD_Product, FPD_Energy, FPD_Information}->select(t | self.oclIsKindOf(t))->size() = 1

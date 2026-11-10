@@ -7,7 +7,7 @@ namespace FpbMapper.Conversion;
 
 /// <summary>
 /// Coverage of the VDI 3682 Blatt 2 rule catalogue by the executable rule set.
-/// Each of the 60 catalogue rules is bucketed by where (and whether) it runs
+/// Each of the 61 catalogue rules is bucketed by where (and whether) it runs
 /// today; consumers can emit a CSV/JSON breakdown for the conference slide or
 /// pin numbers to a regression test so the catalogue, the OCL files and the
 /// executable validators don't silently drift.
@@ -68,7 +68,7 @@ public sealed class CoverageReport
 public static class CoverageReportBuilder
 {
     /// <summary>
-    /// The 60 catalogue rules from FPB.JS_Docs/Standards/Drafts/
+    /// The 61 catalogue rules from FPB.JS_Docs/Standards/Drafts/
     /// VDI3682-Blatt3-Regelkatalog.md (snapshot 2026-06-15). Each entry pins
     /// the catalogue id to its OCL invariant name (when one exists in the
     /// catalogue) and a coarse category for the slide colour-coding.
@@ -136,6 +136,7 @@ public static class CoverageReportBuilder
         ("G3", "Keine Selbstreferenz",             "Semantic",    "NoSelfReference",                 null),
         ("G4", "Keine verwaisten Elemente",        "Semantic",    "NoOrphanedElements",              null),
         ("G5", "SubProcess nicht leer",            "Semantic",    "SubProcessNotEmpty",              "Phase 2"),
+        ("G6", "Produkt rein, Produkt raus",       "Semantic",    "ProductBalance",                  null),
 
         // ── H — Geometry / Layout ───────────────────────────────────────────
         ("H1", "Bounds vorhanden",                 "Geometry",    "BoundsPresent",                   "Plugin-Layer"),
